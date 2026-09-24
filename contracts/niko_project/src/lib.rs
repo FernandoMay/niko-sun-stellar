@@ -305,12 +305,21 @@ impl NikoProject {
             .get((project_id, buyer.clone()))
             .unwrap_or(0);
         balances.set(
-            (project_id, buyer),
+            (project_id, buyer.clone()),
             current
                 .checked_add(amount)
                 .expect("buyer balance overflow"),
         );
         env.storage().instance().set(&PENDING, &balances);
+
+        // Event for off-chain holder indexer: topic filterable by buyer,
+        // data (project_id, amount) allows reconstructing Map<buyer, balance> without reading storage.
+        // Chose (symbol_short!("purchase"), buyer) as topics so Horizon/RPC getEvents
+        // can filter by buyer address; alternative (single topic) would require scanning all events.
+        env.events().publish(
+            (symbol_short!("purchase"), buyer.clone()),
+            (project_id, amount),
+        );
     }
 
     // ========================================
