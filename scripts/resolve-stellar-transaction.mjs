@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const require = createRequire(new URL("../frontend/package.json", import.meta.url));
-const { StrKey, xdr } = require("@stellar/stellar-sdk");
+const { StrKey, xdr, hash } = require("@stellar/stellar-sdk");
 
 const DEFAULT_HORIZON_URL = "https://horizon-testnet.stellar.org";
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -14,8 +14,10 @@ const POLL_INTERVAL_MS = 2_000;
 // Polling is read-only; this helper never submits or retries a transaction.
 const ACCOUNT_PAGE_LIMIT = 200;
 const OPERATION_PAGE_LIMIT = 200;
-const CREATE_CONTRACT_FUNCTION =
-  "HostFunctionTypeHostFunctionTypeCreateContract";
+const CREATE_CONTRACT_FUNCTIONS = new Set([
+  "HostFunctionTypeHostFunctionTypeCreateContract",
+  "HostFunctionTypeHostFunctionTypeCreateContractV2",
+]);
 const INVOKE_CONTRACT_FUNCTION =
   "HostFunctionTypeHostFunctionTypeInvokeContract";
 
@@ -363,7 +365,32 @@ function argumentsMatch(actual, expected) {
   });
 }
 
-function deploymentContractId(resultXdr) {
+function deploymentContractId(operation, resultXdr) {
+  if (operation?.function === "HostFunctionTypeHostFunctionTypeCreateContractV2") {
+    try {
+      const addressParameter = operation.parameters?.[0];
+      if (!addressParameter?.value) return null;
+      const addressValue = decodeScVal(addressParameter);
+      const address = addressValue?.address;
+      const salt = operation.salt;
+      if (!address || !/^\d+$/.test(String(salt))) return null;
+      const saltBytes = Buffer.from(BigInt(salt).toString(16).padStart(64, "0"), "hex");
+      if (saltBytes.length !== 32) return null;
+      const networkId = hash(new TextEncoder().encode("Test SDF Network ; September 2015"));
+      const preimage = xdr.HashIdPreimage.envelopeTypeContractId(
+        new xdr.HashIdPreimageContractId({
+          networkId,
+          contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+            new xdr.ContractIdPreimageFromAddress({ address, salt: saltBytes })
+          ),
+        })
+      );
+      return StrKey.encodeContract(hash(preimage.toXDR()));
+    } catch {
+      return null;
+    }
+  }
+
   if (typeof resultXdr !== "string" || !/^[A-Za-z0-9+/]*={0,2}$/.test(resultXdr)) return null;
   try {
     const bytes = Buffer.from(resultXdr, "base64");
@@ -372,8 +399,12 @@ function deploymentContractId(resultXdr) {
     const operationResult = result.result?.results?.[0];
     const hostResult = operationResult?.tr?.invokeHostFunctionResult;
     const contractHash = hostResult?.success?.value;
-    if (!(contractHash instanceof Uint8Array) || contractHash.length !== 32) return null;
-    return StrKey.encodeContract(contractHash);
+    const contractBytes =
+      typeof contractHash === "string" && /^[0-9a-f]{64}$/.test(contractHash)
+        ? Buffer.from(contractHash, "hex")
+        : contractHash;
+    if (!(contractBytes instanceof Uint8Array) || contractBytes.length !== 32) return null;
+    return StrKey.encodeContract(contractBytes);
   } catch {
     return null;
   }
@@ -400,9 +431,11 @@ async function matchTransaction(transaction, options, deadline) {
   }
 
   if (options.kind === "deploy") {
-    if (operation.function !== CREATE_CONTRACT_FUNCTION) return false;
-    if (operation.parameters !== null) return false;
-    return deploymentContractId(transaction.result_xdr) === options.contractId;
+    if (!CREATE_CONTRACT_FUNCTIONS.has(operation.function)) return false;
+    if (operation.parameters !== null && operation.parameters !== undefined) {
+      if (!Array.isArray(operation.parameters) || operation.parameters.length < 2) return false;
+    }
+    return deploymentContractId(operation, transaction.result_xdr) === options.contractId;
   }
 
   if (operation.function !== INVOKE_CONTRACT_FUNCTION) return false;
