@@ -46,17 +46,20 @@ describe("Investment calculator", () => {
     expect(co2).toBe(32);
   });
 
-  it("calculates payment in stroops", () => {
+  it("purchase_tokens call args have 3 elements (buyer, project_id, amount)", () => {
+    const address = "GABGH363YQNYYAUN2M6YAPYFLPDMU5GZIJDWOEC2G3AUEH3TLPSXN3TX";
+    const projectId = 1;
     const tokenCount = 10;
-    const paymentStroops = BigInt(
-      Math.round(tokenCount * PRICE_PER_TOKEN * 1_000_000)
-    );
-    expect(paymentStroops).toBe(BigInt(100_000_000));
+    const args = [address, BigInt(projectId), BigInt(tokenCount)];
+    expect(args).toHaveLength(3);
+    expect(args[0]).toBe(address);
+    expect(args[1]).toBe(BigInt(1));
+    expect(args[2]).toBe(BigInt(10));
   });
 
-  it("BigInt payment converts to string for display", () => {
-    const paymentStroops = BigInt(100_000_000);
-    expect(paymentStroops.toString()).toBe("100000000");
+  it("BigInt token amount converts to string for display", () => {
+    const amount = BigInt(100);
+    expect(amount.toString()).toBe("100");
   });
 
   it("token count must be >= 1", () => {

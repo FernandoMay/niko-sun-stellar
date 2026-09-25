@@ -9,8 +9,7 @@ import TransactionSuccess from "@/components/TransactionSuccess";
 /* ──────────────────── Constants ──────────────────── */
 
 const PROJECT = {
-  contractId:
-    "CB7V3676CQBO5OL6DEXI5FORLG37IR2GR7LXCZD7DUZTMSUT7BEEINR3",
+  contractId: CONTRACT_ID,
   name: "Parque Solar Lima Norte",
   flag: "\uD83C\uDDF5\uD83C\uDDF7",
   slug: "lima-norte",
@@ -255,19 +254,16 @@ export default function ProjectDetailClient({ id }: { id?: string }) {
     setSigningPhase("preparing");
 
     try {
-      const paymentStroops = BigInt(
-        Math.round(tokenCount * pricePerToken * 1_000_000)
-      );
-
       await new Promise((r) => setTimeout(r, 300));
 
       // ── Purchase tokens ──
+      // contract: purchase_tokens(buyer: Address, project_id: u64, amount: u128)
       setSigningPhase("signing");
       const projectIdForTx = BigInt(Number(id) || 1);
       const { txHash: hash } = await signAndSend(
         CONTRACT_ID,
         "purchase_tokens",
-        [address, projectIdForTx, BigInt(tokenCount), paymentStroops]
+        [address, projectIdForTx, BigInt(tokenCount)]
       );
 
       setTxHash(hash);

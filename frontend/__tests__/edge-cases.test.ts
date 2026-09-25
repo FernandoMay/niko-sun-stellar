@@ -49,13 +49,10 @@ describe("Flow edge cases", () => {
     expect(count).toBe(1);
   });
 
-  it("payment stroops never negative", () => {
+  it("purchase_tokens amount arg (u128) is positive", () => {
     const tokenCount = 1;
-    const pricePerToken = 10;
-    const paymentStroops = BigInt(
-      Math.round(tokenCount * pricePerToken * 1_000_000)
-    );
-    expect(paymentStroops > 0n).toBe(true);
+    const amount = BigInt(tokenCount);
+    expect(amount > 0n).toBe(true);
   });
 
   it("address shortener works correctly", () => {
