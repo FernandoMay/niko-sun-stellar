@@ -75,7 +75,7 @@ describe("holder event indexer primitives", () => {
 
     expect(filter.type).toBe("contract");
     expect(filter.contractIds).toEqual([CONTRACT_ID]);
-    expect(filter.topics).toEqual([[expectedTopic]]);
+    expect(filter.topics).toEqual([[expectedTopic, "*"]]);
     expect(JSON.stringify(filter)).not.toContain("purchase_tokens");
   });
 

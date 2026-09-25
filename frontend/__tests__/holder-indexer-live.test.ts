@@ -1,10 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  getHolderCount,
-  type HolderMetrics,
-} from "../lib/holderIndexer";
+import { getHolderCount, type HolderMetrics } from "../lib/holderIndexer";
+import { CONTRACT_DEPLOYMENT_LEDGER, CONTRACT_ID } from "../lib/contract";
 
 const POLL_INTERVAL_MS = 2_000;
 const POLL_TIMEOUT_MS = 45_000;
@@ -168,8 +166,12 @@ describe("live holder indexer", () => {
 
       // The contract ID and deployment ledger are required inputs; the indexer
       // reads the ID and ledger from the real contract module at runtime.
-      requiredEnv("NEXT_PUBLIC_CONTRACT_ID");
-      requiredEnv("NEXT_PUBLIC_CONTRACT_DEPLOYMENT_LEDGER");
+      const configuredContractId = requiredEnv("NEXT_PUBLIC_CONTRACT_ID");
+      const configuredDeploymentLedger = Number(
+        requiredEnv("NEXT_PUBLIC_CONTRACT_DEPLOYMENT_LEDGER")
+      );
+      expect(CONTRACT_ID).toBe(configuredContractId);
+      expect(CONTRACT_DEPLOYMENT_LEDGER).toBe(configuredDeploymentLedger);
 
       const deadline = Date.now() + POLL_TIMEOUT_MS;
       let latestObserved: ObservedMetrics | null = null;

@@ -120,7 +120,7 @@ export function buildPurchaseEventFilter(
   return {
     type: "contract",
     contractIds: [contractId],
-    topics: [[purchaseTopic]],
+    topics: [[purchaseTopic, "*"]],
   };
 }
 
@@ -941,6 +941,13 @@ async function scanPurchaseEvents(
       return result;
     }
     if (nextCursor === cursor) {
+      if (events.length === 0) {
+        result.complete =
+          authoritativeStart &&
+          !result.retentionStartedAfterScan &&
+          events.length < EVENT_PAGE_LIMIT;
+        return result;
+      }
       result.rpcFailed = true;
       return result;
     }
