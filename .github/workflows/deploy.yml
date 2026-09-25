@@ -45,29 +45,27 @@ jobs:
         env:
           DEPLOYER_SECRET: ${{ secrets.DEPLOYER_SECRET }}
         run: |
+          # Native XLM Stellar Asset Contract on Testnet
+          NATIVE_TOKEN=$(stellar contract id asset --asset native --network testnet)
+          # `stellar keys public-key` accepts the raw deployer secret.
+          DEPLOYER_PUBLIC=$(stellar keys public-key "$DEPLOYER_SECRET")
+          echo "DEPLOYER_PUBLIC=$DEPLOYER_PUBLIC" >> $GITHUB_ENV
           CONTRACT_ID=$(stellar contract deploy \
             --wasm niko_project_opt.wasm \
             --source "$DEPLOYER_SECRET" \
             --network testnet \
-            --alias niko-sun)
+            --alias niko-sun \
+            -- \
+            --admin "$DEPLOYER_PUBLIC" \
+            --token "$NATIVE_TOKEN")
           echo "Deployed contract: $CONTRACT_ID"
           echo "CONTRACT_ID=$CONTRACT_ID" >> $GITHUB_ENV
-
-      - name: Initialize Contract
-        env:
-          DEPLOYER_SECRET: ${{ secrets.DEPLOYER_SECRET }}
-        run: |
-          stellar contract invoke \
-            --id ${{ env.CONTRACT_ID }} \
-            --source "$DEPLOYER_SECRET" \
-            --network testnet \
-            -- initialize
 
       - name: Create Project #1
         env:
           DEPLOYER_SECRET: ${{ secrets.DEPLOYER_SECRET }}
         run: |
-          DEPLOYER_ADDRESS=$(stellar keys address "$DEPLOYER_SECRET")
+          DEPLOYER_ADDRESS="$DEPLOYER_PUBLIC"
           stellar contract invoke \
             --id ${{ env.CONTRACT_ID }} \
             --source "$DEPLOYER_SECRET" \
@@ -82,7 +80,7 @@ jobs:
       - name: Print Result
         run: |
           echo "============================================"
-          echo "CONTRACT DEPLOYED AND INITIALIZED"
+          echo "CONTRACT DEPLOYED WITH CONSTRUCTOR"
           echo "Contract ID: ${{ env.CONTRACT_ID }}"
           echo "============================================"
           echo ""

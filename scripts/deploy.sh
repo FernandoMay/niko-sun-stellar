@@ -42,32 +42,24 @@ fi
 DEPLOYER_ADDR=$(stellar keys address $DEPLOYER --network $NETWORK)
 echo "📋 Deployer: $DEPLOYER_ADDR"
 
-# Deploy contract
+# Deploy contract with constructor arguments
+# The native XLM Stellar Asset Contract is the payment token.
 echo ""
 echo "🚀 Deploying $CONTRACT_NAME..."
+NATIVE_TOKEN=$(stellar contract id asset --asset native --network "$NETWORK")
 CONTRACT_ID=$(stellar contract deploy \
     --wasm "$WASM_PATH" \
     --source-account $DEPLOYER \
     --network $NETWORK \
-    --alias niko_sun)
+    --alias niko_sun \
+    -- \
+    --admin "$DEPLOYER_ADDR" \
+    --token "$NATIVE_TOKEN")
 
 echo ""
-echo "✅ Contract deployed!"
+echo "✅ Contract deployed with constructor!"
 echo "   Contract ID: $CONTRACT_ID"
 echo "   Alias: niko_sun"
-echo ""
-
-# Initialize contract
-echo "⚙️  Initializing contract..."
-stellar contract invoke \
-    --id niko_sun \
-    --source-account $DEPLOYER \
-    --network $NETWORK \
-    -- \
-    initialize
-
-echo ""
-echo "✅ Contract initialized!"
 echo ""
 echo "📝 Save this Contract ID for frontend:"
 echo "   $CONTRACT_ID"

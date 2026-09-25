@@ -110,7 +110,7 @@ Open [http://localhost:3000](http://localhost:3000)
 
 | Function | Description |
 |----------|-------------|
-| `initialize()` | Initialize the contract |
+| `__constructor()` | Bind the administrator and native XLM payment token at deployment |
 | `create_project()` | Create a new solar project |
 | `purchase_tokens()` | Buy project tokens with XLM |
 | `deposit_revenue()` | Deposit energy revenue for distribution |
