@@ -17,6 +17,8 @@ import {
   requestAccess,
   signTransaction,
 } from "@stellar/freighter-api";
+import { formatStroopsAsXlm, parseXlmToStroops } from "@/lib/amounts";
+import { requireSuccessfulTransaction } from "@/lib/transactionFinality";
 
 const SERVER_URL =
   process.env.NEXT_PUBLIC_STELLAR_RPC_URL ||
@@ -27,12 +29,10 @@ const PASSPHRASE =
 const HORIZON_URL =
   process.env.NEXT_PUBLIC_STELLAR_HORIZON_URL ||
   "https://horizon-testnet.stellar.org";
-const XLM_TO_USD = 0.13;
 
 interface WalletState {
   address: string | null;
   balance: string;
-  balanceUsd: string;
   network: string;
   connected: boolean;
   connecting: boolean;
@@ -82,8 +82,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
   const [state, setState] = useState<WalletState>({
     address: null,
-    balance: "0",
-    balanceUsd: "0.00",
+    balance: "Unavailable",
     network: "",
     connected: false,
     connecting: false,
@@ -98,23 +97,30 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (!state.address) return;
     try {
       const res = await fetch(`${HORIZON_URL}/accounts/${state.address}`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        setState((s) => ({ ...s, balance: "Unavailable" }));
+        return;
+      }
       const data = await res.json();
       const native = data.balances?.find(
         (b: { asset_type: string }) => b.asset_type === "native"
       );
-      if (native) {
-        const bal = native.balance;
-        const usd = (parseFloat(bal) * XLM_TO_USD).toFixed(2);
-        setState((s) => ({
-          ...s,
-          balance: parseFloat(bal).toLocaleString("en-US", {
-            maximumFractionDigits: 2,
-          }),
-          balanceUsd: usd,
-        }));
+      if (!native || typeof native.balance !== "string") {
+        setState((s) => ({ ...s, balance: "Unavailable" }));
+        return;
       }
+      const balanceStroops = parseXlmToStroops(native.balance);
+      if (balanceStroops === null) {
+        setState((s) => ({ ...s, balance: "Unavailable" }));
+        return;
+      }
+
+      setState((s) => ({
+        ...s,
+        balance: formatStroopsAsXlm(balanceStroops, { suffix: false }),
+      }));
     } catch (err) {
+      setState((s) => ({ ...s, balance: "Unavailable" }));
       console.error("Failed to fetch balance:", err);
     }
   }, [state.address]);
@@ -148,21 +154,26 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const disconnect = useCallback(() => {
     setState({
       address: null,
-      balance: "0",
-      balanceUsd: "0.00",
+      balance: "Unavailable",
       network: "",
       connected: false,
       connecting: false,
     });
   }, []);
 
-  // ── Shared helper: convert args to ScVal ──
-  // Methods where project_id (index 1) is u64: purchase_tokens, deposit_revenue, claim_revenue,
-  // withdraw_sales, update_energy, get_project, get_project_name, get_sales_balance, get_claimable
-  const u64ProjectMethods = new Set([
-    "purchase_tokens", "deposit_revenue", "claim_revenue", "withdraw_sales",
-    "update_energy", "get_project", "get_project_name", "get_sales_balance",
-    "get_claimable", "set_project_status", "transfer_ownership",
+  // Project IDs are u64, but their argument position depends on the method.
+  const projectIdArgIndexes = new Map<string, number>([
+    ["purchase_tokens", 1],
+    ["deposit_revenue", 1],
+    ["claim_revenue", 1],
+    ["withdraw_sales", 1],
+    ["update_energy", 1],
+    ["get_claimable", 1],
+    ["get_project", 0],
+    ["get_project_name", 0],
+    ["get_sales_balance", 0],
+    ["set_project_status", 1],
+    ["transfer_ownership", 1],
   ]);
 
   const toScVals = useCallback(
@@ -203,11 +214,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (typeof a === "bigint" || typeof a === "number") {
-          // project_id (index 1) is u64 for most methods
-          const isU64 =
-            index === 1 && method && u64ProjectMethods.has(method);
-
-          if (isU64) {
+          const projectIdIndex = method
+            ? projectIdArgIndexes.get(method)
+            : undefined;
+          if (projectIdIndex === index) {
             return sdk.nativeToScVal(BigInt(a.toString()), { type: "u64" });
           }
 
@@ -256,48 +266,30 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       const response = await server.sendTransaction(signedTx);
 
       if (response.status === "ERROR") {
-        let errMsg: string;
-        try {
-          errMsg = JSON.stringify(
-            response.errorResult,
-            (_key: string, value: unknown) =>
-              typeof value === "bigint" ? value.toString() : value
-          );
-        } catch {
-          errMsg = String(response.errorResult);
-        }
-        throw new Error(`Transaction failed: ${errMsg}`);
+        throw new Error("Transaction submission was rejected.");
+      }
+      if (typeof response.hash !== "string" || response.hash.length === 0) {
+        throw new Error("Transaction submission did not return a transaction hash.");
       }
 
-      // Poll for result
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let result: any;
+      // Poll for a closed-ledger result. A submitted hash is not a receipt.
+      let result: unknown;
       for (let i = 0; i < 30; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         try {
           result = await server.getTransaction(response.hash);
-          if (result.status !== "NOT_FOUND") break;
+          const status =
+            result && typeof result === "object"
+              ? (result as { status?: unknown }).status
+              : undefined;
+          if (status !== "NOT_FOUND") break;
         } catch {
-          // continue polling
+          // Continue polling transient RPC errors until the deadline.
         }
       }
 
-      // Throw on on-chain failure (e.g. contract panic)
-      if (result?.status === "FAILED") {
-        let detail: string;
-        try {
-          detail = JSON.stringify(
-            result.result,
-            (_key: string, value: unknown) =>
-              typeof value === "bigint" ? value.toString() : value
-          );
-        } catch {
-          detail = String(result.result);
-        }
-        throw new Error(`Transaction failed on-chain: ${detail}`);
-      }
-
-      return { txHash: response.hash, result: result?.result };
+      const successfulResult = requireSuccessfulTransaction(result);
+      return { txHash: response.hash, result: successfulResult.result };
     },
     [state.address]
   );
@@ -368,7 +360,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       if (sdk.rpc.Api.isSimulationError(result)) {
         throw new Error(`Simulation failed: ${result.error}`);
       }
-      return result.result?.retval;
+      const retval = result.result?.retval;
+      if (!retval) throw new Error("Contract read returned no value");
+      return sdk.scValToNative(retval);
     },
     [state.address, toScVals]
   );

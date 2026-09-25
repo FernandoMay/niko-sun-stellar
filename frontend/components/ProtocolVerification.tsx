@@ -20,6 +20,7 @@ type Props = {
   metrics: HolderMetrics | null;
   nextProjectId?: number | null;
   totalMinted?: string | null;
+  catalogStatus?: "ready" | "partial" | "unavailable" | "empty";
 };
 
 function shortContract(id: string) {
@@ -30,6 +31,7 @@ export default function ProtocolVerification({
   metrics,
   nextProjectId,
   totalMinted,
+  catalogStatus = "unavailable",
 }: Props) {
   const [nowTick, setNowTick] = useState(0);
 
@@ -102,22 +104,36 @@ export default function ProtocolVerification({
     hasStateEvidence &&
     metrics !== null &&
     metrics.activeHolders !== null;
+  const catalogReadComplete = catalogStatus === "ready" || catalogStatus === "empty";
   const hasProjectEvidence =
     hasDeploymentReceipt &&
     hasStateEvidence &&
+    catalogReadComplete &&
     nextProjectId != null &&
     Number.isSafeInteger(nextProjectId) &&
-    nextProjectId >= 0;
+    nextProjectId >= 1;
   const contractStatus = hasDeploymentReceipt
     ? hasStateEvidence
       ? "Verified"
       : "Read incomplete"
     : "Awaiting deployment receipt";
+  const catalogReadStatus =
+    catalogStatus === "partial"
+      ? "Partial read"
+      : catalogStatus === "unavailable"
+        ? "Unavailable"
+        : "Read incomplete";
   const unverifiedReadStatus = hasDeploymentReceipt
-    ? "Read incomplete"
+    ? catalogReadStatus
     : "Awaiting deployment receipt";
   const claimableStatus = hasClaimableEvidence ? "On-chain" : unverifiedReadStatus;
   const projectStatus = hasProjectEvidence ? "On-chain" : unverifiedReadStatus;
+  const mintedDisplay =
+    catalogStatus === "empty" && nextProjectId === 1 && totalMinted === "0"
+      ? "0"
+      : catalogStatus === "ready" && totalMinted !== null && totalMinted !== undefined
+        ? totalMinted
+        : "Unavailable";
 
   // Keep hook alive for rerenders; suppress lint for unused var.
   void nowTick;
@@ -174,9 +190,7 @@ export default function ProtocolVerification({
                   ? `(contract minted: ${contractMintedDisplay} · indexed: ${indexedBalanceDisplay})`
                   : metrics
                     ? `(contract minted: ${contractMintedDisplay})`
-                    : totalMinted != null
-                      ? `(total minted: ${totalMinted})`
-                      : undefined
+                    : `(total minted: ${mintedDisplay})`
               }
             />
             <Row

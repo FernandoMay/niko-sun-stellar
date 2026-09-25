@@ -1,81 +1,82 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useWallet } from "@/lib/WalletContext";
-import { CONTRACT_ID } from "@/lib/contract";
-import PdfCertificate from "@/components/PdfCertificate";
+import { CONTRACT_ID, TX_EXPLORER } from "@/lib/contract";
 import ProtocolVerification from "@/components/ProtocolVerification";
 import { useHolderMetrics } from "@/hooks/useHolderMetrics";
+import {
+  boundedPercent,
+  formatIntegerAmount,
+  formatStroopsAsXlm,
+  parseTransferAmount,
+  parseUnsignedBigInt,
+  sumBigints,
+} from "@/lib/amounts";
+import {
+  deriveTotalMinted,
+  readInvestorPortfolio,
+  readProjectCatalog,
+  readUserProjectIds,
+  selectPositiveClaimable,
+  sumOwnedProjectAmounts,
+  sumPortfolioTokens,
+  sumReferentialValueStroops,
+  type ClaimablePosition,
+  type ContractProject,
+  type InvestorPortfolio,
+  type ProjectCatalog,
+} from "@/lib/contractData";
 
-/* ── Constants ── */
 type View = "dashboard" | "projects" | "claim" | "metrics" | "admin";
+type SendTransaction = (
+  contractId: string,
+  method: string,
+  args: unknown[]
+) => Promise<{ txHash: string; result?: unknown }>;
 
-const projects = [
-  {
-    name: "Solar Lima Norte",
-    location: "Lima, Perú",
-    capacity: "150 kW",
-    tokens: "15",
-    invested: "150",
-    dividends: "8.2",
-    energy: "45,200",
-    apy: "12.5%",
-    progress: 68,
-    tone: "lime" as const,
-    projectId: 0,
-  },
-  {
-    name: "Solar Arequipa",
-    location: "Arequipa, Perú",
-    capacity: "320 kW",
-    tokens: "20",
-    invested: "200",
-    dividends: "12.1",
-    energy: "82,640",
-    apy: "14.2%",
-    progress: 84,
-    tone: "orange" as const,
-    projectId: 1,
-  },
-  {
-    name: "Solar San Martín",
-    location: "Tarapoto, Perú",
-    capacity: "90 kW",
-    tokens: "10",
-    invested: "100",
-    dividends: "3.1",
-    energy: "26,880",
-    apy: "11.8%",
-    progress: 42,
-    tone: "amber" as const,
-    projectId: 2,
-  },
-];
+type ClaimReceipt = {
+  projectId: number;
+  amount: bigint;
+  txHash: string;
+};
 
 const nav = [
   { id: "dashboard" as const, label: "Dashboard", icon: "home" },
-  { id: "projects" as const, label: "Mis proyectos", icon: "battery_charging_full" },
-  { id: "claim" as const, label: "Reclamar dividendos", icon: "payments" },
+  { id: "projects" as const, label: "Proyectos", icon: "battery_charging_full" },
+  { id: "claim" as const, label: "Reclamar", icon: "payments" },
   { id: "metrics" as const, label: "Métricas", icon: "bar_chart" },
   { id: "admin" as const, label: "Admin", icon: "settings" },
 ];
 
-/* ── Components ── */
+const EMPTY_CATALOG: ProjectCatalog = {
+  status: "unavailable",
+  nextProjectId: null,
+  projectIds: [],
+  projects: [],
+  unavailableProjectIds: [],
+  error: null,
+};
+
+const EMPTY_PORTFOLIO: InvestorPortfolio = {
+  status: "empty",
+  positions: [],
+  claimables: {},
+  unavailableProjectIds: [],
+  error: null,
+};
 
 function Logo() {
   return (
     <a href="/" className="flex items-center gap-3.5 group">
       <div className="relative flex items-center justify-center w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-50 to-amber-50 border border-emerald-200 shadow-sm group-hover:border-emerald-500 transition-all p-1">
-        <span className="material-symbols-outlined text-emerald-600 text-[22px]">
-          solar_power
-        </span>
+        <span className="material-symbols-outlined text-emerald-600 text-[22px]">solar_power</span>
       </div>
       <div className="flex flex-col">
         <div className="flex items-center gap-1.5">
           <span className="text-xl tracking-tight font-extrabold text-slate-900 font-display">
-            NIKO
-            <span className="text-amber-600">SUN</span>
+            NIKO<span className="text-amber-600">SUN</span>
           </span>
           <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-100 text-emerald-800 font-bold border border-emerald-300">
             RWA SOLAR
@@ -89,83 +90,52 @@ function Logo() {
   );
 }
 
-function MiniChart({ orange = false }: { orange?: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 180 56"
-      className="h-14 w-full"
-      preserveAspectRatio="none"
-      aria-label="Revenue trend chart"
-    >
-      <path
-        d="M0 47 C20 46 18 33 38 36 S52 43 69 29 S86 33 101 20 S119 28 133 13 S154 20 180 4"
-        fill="none"
-        stroke={orange ? "#ea580c" : "#059669"}
-        strokeWidth="2.5"
-      />
-      <path
-        d="M0 47 C20 46 18 33 38 36 S52 43 69 29 S86 33 101 20 S119 28 133 13 S154 20 180 4 V56 H0Z"
-        fill={orange ? "url(#orange)" : "url(#green)"}
-        opacity=".14"
-      />
-      <defs>
-        <linearGradient id="green" x1="0" x2="0" y1="0" y2="1">
-          <stop stopColor="#059669" />
-          <stop offset="1" stopColor="#059669" stopOpacity="0" />
-        </linearGradient>
-        <linearGradient id="orange" x1="0" x2="0" y1="0" y2="1">
-          <stop stopColor="#ea580c" />
-          <stop offset="1" stopColor="#ea580c" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-    </svg>
-  );
-}
-
 function StatCard({
   icon,
   label,
   value,
-  change,
+  sub,
   action,
   onAction,
-  demo,
+  disabled = false,
+  badge,
 }: {
   icon: string;
   label: string;
   value: string;
-  change?: string;
+  sub?: string;
   action?: string;
   onAction?: () => void;
-  demo?: boolean;
+  disabled?: boolean;
+  badge?: "Estimated" | "Unavailable" | "Partial";
 }) {
   return (
     <div className="bg-white border border-slate-200 rounded-xl shadow-md relative overflow-hidden p-5">
-      {demo && (
+      {badge ? (
         <span className="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-50 border border-amber-200 text-amber-700">
-          DEMO
+          {badge.toUpperCase()}
         </span>
-      )}
-      <div className="mb-5 flex items-center justify-between">
+      ) : null}
+      <div className="mb-5 flex items-center justify-between gap-3">
         <div className="grid size-9 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
           <span className="material-symbols-outlined text-[18px]">{icon}</span>
         </div>
-        {change && (
-          <span className="text-xs font-medium text-emerald-600">{change}</span>
-        )}
-        {action && (
+        {action ? (
           <button
+            type="button"
             onClick={onAction}
-            className="h-7 bg-orange-600 hover:bg-orange-700 px-2.5 rounded-lg text-xs text-white font-semibold transition-colors"
+            disabled={disabled}
+            className="h-7 bg-orange-600 hover:bg-orange-700 px-2.5 rounded-lg text-xs text-white font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
           >
             {action}
           </button>
-        )}
+        ) : null}
       </div>
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 font-mono text-2xl font-bold tracking-tight text-slate-900">
+      <div className="mt-1 font-mono text-xl font-bold tracking-tight text-slate-900 break-words">
         {value}
       </div>
+      {sub ? <div className="mt-2 text-[10px] leading-relaxed text-slate-400">{sub}</div> : null}
     </div>
   );
 }
@@ -187,9 +157,7 @@ function Sidebar({
 }) {
   return (
     <aside className="flex w-[236px] shrink-0 flex-col border-r border-slate-200 bg-white px-4 py-6 max-lg:w-[76px] max-lg:items-center max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-30 max-md:h-[70px] max-md:w-full max-md:flex-row max-md:justify-around max-md:border-t max-md:border-r-0 max-md:px-2 max-md:py-2">
-      <div className="mb-10 max-lg:mb-0 max-lg:hidden">
-        <Logo />
-      </div>
+      <div className="mb-10 max-lg:mb-0 max-lg:hidden"><Logo /></div>
       <div className="mb-10 hidden max-lg:block">
         <a href="/" className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-emerald-50 to-amber-50 border border-emerald-200">
           <span className="material-symbols-outlined text-emerald-600 text-[22px]">solar_power</span>
@@ -199,547 +167,407 @@ function Sidebar({
         {nav.map(({ id, label, icon }) => (
           <button
             key={id}
+            type="button"
             onClick={() => setView(id)}
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 max-lg:justify-center max-lg:px-2 max-md:flex-col max-md:gap-1 max-md:py-1 max-md:text-[10px]",
-              view === id &&
-                "bg-emerald-50 font-medium text-emerald-700 border border-emerald-200"
+              view === id && "bg-emerald-50 font-medium text-emerald-700 border border-emerald-200"
             )}
           >
             <span className="material-symbols-outlined text-[18px]">{icon}</span>
             <span className="max-lg:hidden max-md:block">{label}</span>
           </button>
         ))}
+        <a
+          href="/proof"
+          className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 max-lg:justify-center max-lg:px-2 max-md:flex-col max-md:gap-1 max-md:py-1 max-md:text-[10px]"
+        >
+          <span className="material-symbols-outlined text-[18px]">verified_user</span>
+          <span className="max-lg:hidden max-md:block">Proof</span>
+        </a>
       </nav>
       <div className="mt-auto w-full max-lg:hidden">
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
           <div className="mb-3 flex items-center gap-2">
             <div className="grid size-8 place-items-center rounded-full bg-orange-100 text-orange-600">
-              <span className="material-symbols-outlined text-[16px]">
-                account_balance_wallet
-              </span>
+              <span className="material-symbols-outlined text-[16px]">account_balance_wallet</span>
             </div>
             <div>
               <div className="font-mono text-[11px] text-slate-700">
-                {connected && address
-                  ? `${address.slice(0, 4)}...${address.slice(-4)}`
-                  : "Sin conectar"}
+                {connected && address ? `${address.slice(0, 4)}...${address.slice(-4)}` : "Sin conectar"}
               </div>
-              <div className="text-[10px] text-slate-500">
-                {connected ? `${balance} XLM` : "—"}
-              </div>
+               <div className="text-[10px] text-slate-500">{connected ? (balance === "Unavailable" ? "Unavailable" : `${balance} XLM`) : "—"}</div>
+
             </div>
           </div>
           <div className="mb-3 flex items-center gap-1.5 text-[10px] text-emerald-700">
-            <span className="size-1.5 rounded-full bg-emerald-500" /> Stellar
-            Testnet
+            <span className="size-1.5 rounded-full bg-emerald-500" /> Stellar Testnet
           </div>
-          {!connected && (
+          {!connected ? (
             <button
+              type="button"
               onClick={connect}
               className="h-7 w-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 rounded-lg text-xs font-medium transition-colors"
             >
               Conectar wallet
             </button>
-          )}
+          ) : null}
         </div>
       </div>
     </aside>
   );
 }
 
-function ProjectCard({
-  project,
-  onSelect,
-  realProgress,
-  realPrice,
-  isLoading,
-}: {
-  project: (typeof projects)[number];
-  onSelect: () => void;
-  realProgress?: number | null;
-  realPrice?: string | null;
-  isLoading?: boolean;
-}) {
-  const displayProgress = realProgress != null ? realProgress : project.progress;
-  const displayPrice = realPrice != null ? realPrice : "10 XLM";
-  const isDemo = realProgress == null && !isLoading;
+function ProjectCard({ project }: { project: ContractProject }) {
+  const progress =
+    project.totalSupply !== null && project.minted !== null
+      ? boundedPercent(project.minted, project.totalSupply)
+      : null;
+
   return (
-    <button
-      onClick={onSelect}
-      className="bg-white border border-slate-200 rounded-xl shadow-md group text-left transition hover:-translate-y-0.5 hover:border-emerald-300 w-full relative"
-      style={isLoading ? { opacity: 0.7 } : undefined}
+    <a
+      href={`/project/${project.id}`}
+      className="bg-white border border-slate-200 rounded-xl shadow-md group text-left transition hover:-translate-y-0.5 hover:border-emerald-300 w-full relative block"
     >
-      {isDemo && (
+      {project.stateComplete ? null : (
         <span className="absolute top-2 right-2 z-10 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-50 border border-amber-200 text-amber-700">
-          DEMO
+          PARTIAL
         </span>
       )}
-      <div
-        className={cn(
-          "h-1 rounded-t-xl",
-          project.tone === "orange"
-            ? "bg-orange-500"
-            : project.tone === "amber"
-              ? "bg-amber-400"
-              : "bg-emerald-500"
-        )}
-      />
+      <div className="h-1 rounded-t-xl bg-emerald-500" />
       <div className="p-5">
-        <div className="mb-5 flex items-start justify-between">
+        <div className="mb-5 flex items-start justify-between gap-3">
           <div>
             <div className="mb-1 flex items-center gap-2 font-semibold text-slate-900">
-              {project.name}
-              <span className="material-symbols-outlined text-[12px] text-slate-400 transition group-hover:text-emerald-600">
-                arrow_upward
-              </span>
+              {project.name ?? `Project #${project.id}`}
+              <span className="material-symbols-outlined text-[12px] text-slate-400 transition group-hover:text-emerald-600">arrow_upward</span>
             </div>
-            <div className="text-xs text-slate-500">{project.location}</div>
+            <div className="text-xs text-slate-500">Project #{project.id}</div>
           </div>
-          <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700 border border-emerald-200">
-            Activo
+          <span
+            className={cn(
+              "rounded-full px-2 py-1 text-[10px] font-medium border",
+              project.active === true
+                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                : "bg-slate-50 text-slate-500 border-slate-200"
+            )}
+          >
+            {project.active === true ? "Activo" : project.active === false ? "Inactivo" : "Unavailable"}
           </span>
         </div>
+
         <div className="mb-5 grid grid-cols-2 gap-4">
           <div>
-            <div className="text-[11px] text-slate-500">Capacidad</div>
-            <div className="mt-1 font-mono text-sm text-slate-700">
-              {project.capacity}
-            </div>
+            <div className="text-[11px] text-slate-500">Precio / token</div>
+            <div className="mt-1 font-mono text-sm text-orange-600">{formatStroopsAsXlm(project.price)}</div>
           </div>
           <div>
-            <div className="text-[11px] text-slate-500">APY estimado</div>
-            <div className="mt-1 font-mono text-sm text-emerald-600">
-              {project.apy}
-              <sup className="ml-1 text-[10px] text-slate-400" title="Proyección PPA, no garantizada">
-                *Estimado
-              </sup>
-            </div>
+            <div className="text-[11px] text-slate-500">Sales balance</div>
+            <div className="mt-1 font-mono text-sm text-slate-700">{formatStroopsAsXlm(project.salesBalance)}</div>
           </div>
         </div>
-        <MiniChart orange={project.tone === "orange"} />
-        <div className="mt-4 flex items-center justify-between text-xs">
-          <span className="text-slate-500">Tokens vendidos</span>
-          <span className="font-mono text-slate-600" title={isDemo ? "Valor demo — conectando a testnet" : "Valor on-chain: minted/total_supply"}>
-            {isLoading ? "…" : `${displayProgress}%`}
-          </span>
+
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-slate-500">Tokens minted</span>
+          <span className="font-mono text-slate-600">{project.minted === null ? "—" : formatIntegerAmount(project.minted)}</span>
+        </div>
+        <div className="mt-2 flex items-center justify-between text-xs">
+          <span className="text-slate-500">Progress</span>
+          <span className="font-mono text-slate-600">{progress === null ? "—" : `${progress}%`}</span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
-          <div
-            className={cn(
-              "h-full rounded-full",
-              project.tone === "orange" ? "bg-orange-500" : "bg-emerald-500"
-            )}
-            style={{ width: `${displayProgress}%` }}
-          />
+          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progress ?? 0}%` }} />
         </div>
-        <div className="mt-5 flex items-center justify-between">
-          <span className="font-mono text-sm text-slate-900" title={isDemo ? "Precio demo — on-chain fallback 10 XLM" : `Precio on-chain: ${displayPrice} stroops→XLM`}>
-            {displayPrice}{" "}
-            <span className="font-sans text-xs text-slate-500">/ token</span>
-          </span>
-          <span className="text-xs text-emerald-600">
-            Ver detalle{" "}
-            <span className="material-symbols-outlined ml-1 inline text-[12px]">
-              chevron_right
-            </span>
-          </span>
+        <div className="mt-5 flex items-center justify-between text-xs font-semibold text-emerald-700">
+          <span>Ver detalle</span>
+          <span className="material-symbols-outlined text-[13px]">chevron_right</span>
         </div>
       </div>
-    </button>
+    </a>
   );
 }
 
-/* ── View Sections ── */
+function useDashboardContractState(
+  readContract: ReturnType<typeof useWallet>["readContract"],
+  address: string | null
+) {
+  const [catalog, setCatalog] = useState<ProjectCatalog>(EMPTY_CATALOG);
+  const [portfolio, setPortfolio] = useState<InvestorPortfolio>(EMPTY_PORTFOLIO);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
+
+  const refreshCatalog = useCallback(async () => {
+    setCatalogLoading(true);
+    try {
+      setCatalog(await readProjectCatalog(readContract, CONTRACT_ID));
+    } catch {
+      setCatalog(EMPTY_CATALOG);
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, [readContract]);
+
+  const refreshPortfolio = useCallback(async () => {
+    if (!address) {
+      setPortfolio(EMPTY_PORTFOLIO);
+      setPortfolioLoading(false);
+      return;
+    }
+    if (catalog.projectIds.length === 0) {
+      setPortfolio(EMPTY_PORTFOLIO);
+      setPortfolioLoading(false);
+      return;
+    }
+
+    setPortfolioLoading(true);
+    try {
+      setPortfolio(
+        await readInvestorPortfolio(readContract, CONTRACT_ID, address, catalog.projectIds)
+      );
+    } catch {
+      setPortfolio({
+        status: "unavailable",
+        positions: [],
+        claimables: {},
+        unavailableProjectIds: catalog.projectIds,
+        error: "Portfolio state is unavailable.",
+      });
+    } finally {
+      setPortfolioLoading(false);
+    }
+  }, [address, catalog.projectIds, readContract]);
+
+  useEffect(() => {
+    void refreshCatalog();
+  }, [refreshCatalog]);
+
+  useEffect(() => {
+    void refreshPortfolio();
+  }, [refreshPortfolio]);
+
+  return {
+    catalog,
+    portfolio,
+    catalogLoading,
+    portfolioLoading,
+    refreshCatalog,
+    refreshPortfolio,
+  };
+}
 
 function DashboardView({
   setView,
-  signAndSend,
+  catalog,
+  portfolio,
+  catalogLoading,
+  portfolioLoading,
+  claimAll,
+  claiming,
   connected,
-  address,
+  connect,
+  nextProjectId,
+  totalMinted,
+  holderMetrics,
 }: {
-  setView: (v: View) => void;
-  signAndSend: (
-    contractId: string,
-    method: string,
-    args: unknown[]
-  ) => Promise<{ txHash: string; result?: unknown }>;
+  setView: (view: View) => void;
+  catalog: ProjectCatalog;
+  portfolio: InvestorPortfolio;
+  catalogLoading: boolean;
+  portfolioLoading: boolean;
+  claimAll: () => Promise<void>;
+  claiming: boolean;
   connected: boolean;
-  address?: string | null;
+  connect: () => Promise<void>;
+  nextProjectId: number | null;
+  totalMinted: string | null;
+  holderMetrics: ReturnType<typeof useHolderMetrics>["metrics"];
 }) {
-  const [claiming, setClaiming] = useState(false);
-  const { readContract } = useWallet();
-  const { metrics: holderMetrics } = useHolderMetrics();
-  const [chainProjects, setChainProjects] = useState<Record<number, { progress: number; priceXlm: string; minted: bigint; total: bigint } > | null>(null);
-  const [isChainLoading, setIsChainLoading] = useState(true);
-  const [realClaimable, setRealClaimable] = useState<string | null>(null);
-  const [isPortfolioLoading, setIsPortfolioLoading] = useState(false);
-  const [verifyNextId, setVerifyNextId] = useState<number | null>(null);
-  const [verifyMinted, setVerifyMinted] = useState<string | null>(null);
-
-  const handleClaimAll = async () => {
-    if (!connected || !address) return;
-    setClaiming(true);
-    try {
-      // contract: claim_revenue(investor: Address, project_id: u64) — IDs start at 1
-      await signAndSend(CONTRACT_ID, "claim_revenue", [address, 1]);
-    } catch (e) {
-      console.error("Claim failed:", e);
-    } finally {
-      setClaiming(false);
-    }
-  };
-
-  // Fetch on-chain project data: next_project_id + get_project loop
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const sdk = await import("@stellar/stellar-sdk");
-        const decode = (val: unknown) => {
-          try {
-            return (sdk as unknown as { scValToNative: (v: unknown) => unknown }).scValToNative(val as never);
-          } catch {
-            return val;
-          }
-        };
-        let nextId = 1;
-        try {
-          const rawNext = await readContract(CONTRACT_ID, "next_project_id", []);
-          const decoded = decode(rawNext);
-          if (typeof decoded === "bigint") nextId = Number(decoded);
-          else if (typeof decoded === "number") nextId = decoded;
-          else if (decoded != null) nextId = Number(decoded as string);
-        } catch (e) {
-          console.warn("next_project_id failed, using fallback", e);
-          nextId = 4; // fallback to try 1..3
-        }
-        const ids = [];
-        for (let i = 1; i < nextId; i++) ids.push(i);
-        // limit to 3 for UI, but if nextId is 1 (no project yet) fallback to 1..3 to show demo gracefully
-        const fetchIds = ids.length > 0 ? ids.slice(0, 3) : [1, 2, 3];
-        const results = await Promise.all(
-          fetchIds.map(async (id) => {
-            try {
-              const raw = await readContract(CONTRACT_ID, "get_project", [id]);
-              const p = decode(raw) as Record<string, unknown>;
-              const total = BigInt((p.total_supply ?? p.totalSupply ?? 0) as string | number | bigint);
-              const minted = BigInt((p.minted ?? 0) as string | number | bigint);
-              const price = BigInt((p.price ?? 0) as string | number | bigint);
-              const progress = total > BigInt(0) ? Number((minted * BigInt(100)) / total) : 0;
-              const priceXlm = (Number(price) / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 }) + " XLM";
-              return { id, progress, priceXlm, minted, total };
-            } catch (e) {
-              console.warn(`get_project(${id}) failed, keeping mock`, e);
-              return null;
-            }
-          })
-        );
-        if (cancelled) return;
-        const map: Record<number, { progress: number; priceXlm: string; minted: bigint; total: bigint }> = {};
-        results.forEach((r) => {
-          if (r) map[r.id] = r;
-        });
-        if (Object.keys(map).length > 0) setChainProjects(map);
-      } catch (e) {
-        console.warn("chain projects fetch failed", e);
-      } finally {
-        if (!cancelled) setIsChainLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [readContract]);
-
-  // Fetch real dividends via get_portfolio or get_claimable
-  useEffect(() => {
-    if (!connected || !address) {
-      setRealClaimable(null);
-      return;
-    }
-    let cancelled = false;
-    setIsPortfolioLoading(true);
-    (async () => {
-      try {
-        const sdk = await import("@stellar/stellar-sdk");
-        const decode = (val: unknown) => {
-          try {
-            return (sdk as unknown as { scValToNative: (v: unknown) => unknown }).scValToNative(val as never);
-          } catch {
-            return val;
-          }
-        };
-        // Try get_portfolio for [1,2,3]
-        let totalClaimable = BigInt(0);
-        try {
-          const raw = await readContract(CONTRACT_ID, "get_portfolio", [address, [1, 2, 3]]);
-          const positions = decode(raw) as Array<Record<string, unknown>>;
-          if (Array.isArray(positions)) {
-            for (const pos of positions) {
-              const amt = BigInt((pos.claimable_amount ?? pos.claimableAmount ?? 0) as string | number | bigint);
-              totalClaimable += amt;
-            }
-          }
-        } catch {
-          // fallback: per-project get_claimable
-          const ids = [1, 2, 3];
-          for (const pid of ids) {
-            try {
-              const raw = await readContract(CONTRACT_ID, "get_claimable", [address, pid]);
-              const val = decode(raw);
-              totalClaimable += BigInt(val as string | number | bigint);
-            } catch (e) {
-              console.warn(`get_claimable ${pid} failed`, e);
-            }
-          }
-        }
-        if (!cancelled) {
-          if (totalClaimable > BigInt(0)) {
-            const xlm = Number(totalClaimable) / 1_000_000;
-            setRealClaimable(xlm.toLocaleString("en-US", { maximumFractionDigits: 2 }));
-          } else {
-            setRealClaimable("0.00");
-          }
-        }
-      } catch (e) {
-        console.warn("portfolio fetch failed", e);
-      } finally {
-        if (!cancelled) setIsPortfolioLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [connected, address, readContract]);
-
-  // Verification panel derived data
-  useEffect(() => {
-    if (!chainProjects) return;
-    const ids = Object.keys(chainProjects).map(Number);
-    const total = Object.values(chainProjects).reduce((acc, v) => acc + v.minted, BigInt(0));
-    // nextProjectId is max id +1, or 1 if none
-    const maxId = ids.length > 0 ? Math.max(...ids) : 0;
-    setVerifyNextId(maxId > 0 ? maxId + 1 : null);
-    setVerifyMinted(total > BigInt(0) ? total.toString() : null);
-  }, [chainProjects]);
-
-  const dividendDisplay = connected && realClaimable != null ? `${realClaimable} XLM` : "23.4 XLM";
-  const dividendIsDemo = !connected || realClaimable == null;
-  const investmentDisplay = "450 XLM";
-  const tokensDisplay = "45";
+  const referentialValue = sumReferentialValueStroops(
+    portfolio.positions,
+    catalog.projects,
+    { catalogStatus: catalog.status, portfolioStatus: portfolio.status }
+  );
+  const referentialReady = catalog.status === "ready" && portfolio.status === "ready";
+  const referentialBadge = !connected
+    ? "Unavailable"
+    : referentialReady
+      ? "Estimated"
+      : catalog.status === "partial" || portfolio.status === "partial"
+        ? "Partial"
+        : "Unavailable";
+  const portfolioReady =
+    connected && catalog.status === "ready" && portfolio.status === "ready";
+  const tokenTotal = portfolioReady ? sumPortfolioTokens(portfolio.positions) : null;
+  const claimableTotal = portfolioReady
+    ? sumBigints(Object.values(portfolio.claimables))
+    : null;
+  const positiveClaims = portfolioReady
+    ? selectPositiveClaimable(
+        Object.entries(portfolio.claimables).map(([projectId, amount]) => ({
+          projectId: Number(projectId),
+          amount,
+        }))
+      )
+    : [];
 
   return (
     <div className="flex flex-col gap-7">
-      <div className="flex items-end justify-between">
+      <div className="flex items-end justify-between gap-5">
         <div>
-          <p className="mb-2 text-xs font-medium uppercase tracking-[.18em] text-emerald-600">
-            Resumen de inversión
-          </p>
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900 font-display">
-            Buenos días, inversor
-          </h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Tu portafolio está generando energía limpia hoy.
-          </p>
+          <p className="mb-2 text-xs font-medium uppercase tracking-[.18em] text-emerald-600">Resumen de inversión</p>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900 font-display">Portafolio Testnet</h1>
+          <p className="mt-2 text-sm text-slate-500">Totales derivados de lecturas del contrato; sin fallbacks de negocio.</p>
         </div>
         <button
+          type="button"
           onClick={() => setView("projects")}
           className="hidden bg-emerald-600 text-white hover:bg-emerald-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors sm:flex items-center gap-2"
         >
           Explorar proyectos
-          <span className="material-symbols-outlined text-[16px]">
-            arrow_upward
-          </span>
+          <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
         </button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
         <StatCard
           icon="payments"
-          label="Mi inversión"
-          value={investmentDisplay}
-          change="+12.5% ↑"
-          demo={dividendIsDemo}
+          label="Valor referencial estimado"
+          value={connected ? (referentialValue === null ? "—" : formatStroopsAsXlm(referentialValue)) : "—"}
+          sub="Precio actual on-chain; no representa costo basis ni fiat value."
+          badge={referentialBadge}
         />
         <StatCard
           icon="bolt"
-          label="Dividendos pendientes"
-          value={isPortfolioLoading ? "…" : dividendDisplay}
+          label="Claimable"
+          value={connected ? (claimableTotal === null ? "—" : formatStroopsAsXlm(claimableTotal)) : "—"}
+          sub={connected ? "Suma de get_claimable" : "Conecta una wallet para leer tu posición."}
           action="Reclamar todo"
-          onAction={handleClaimAll}
-          demo={dividendIsDemo}
+          onAction={claimAll}
+          disabled={!portfolioReady || claiming || positiveClaims.length === 0}
+          badge={connected && claimableTotal === null ? "Unavailable" : undefined}
         />
         <StatCard
-          icon="eco"
+          icon="token"
           label="Tokens en posesión"
-          value={tokensDisplay}
-          change="En 3 proyectos"
-          demo={dividendIsDemo}
+          value={connected ? (tokenTotal === null ? "—" : formatIntegerAmount(tokenTotal)) : "—"}
+          sub={connected ? "Suma de get_portfolio" : "Conecta una wallet para leer tu posición."}
+          badge={connected && tokenTotal === null ? "Unavailable" : undefined}
         />
       </div>
 
       <ProtocolVerification
         metrics={holderMetrics}
-        nextProjectId={verifyNextId}
-        totalMinted={verifyMinted}
+        nextProjectId={nextProjectId}
+        totalMinted={totalMinted}
+        catalogStatus={catalog.status}
       />
 
       <section>
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 className="font-semibold text-slate-900 font-display">
-              Proyectos destacados
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              Activos solares con datos on-chain en tiempo real
-            </p>
+            <h2 className="font-semibold text-slate-900 font-display">Proyectos on-chain</h2>
+            <p className="mt-1 text-xs text-slate-500">IDs derivados de next_project_id - 1</p>
           </div>
-          <button
-            onClick={() => setView("projects")}
-            className="text-xs text-emerald-600 hover:text-emerald-700"
-          >
-            Ver todos{" "}
-            <span className="material-symbols-outlined inline text-[12px]">
-              chevron_right
-            </span>
+          <button type="button" onClick={() => setView("projects")} className="text-xs text-emerald-600 hover:text-emerald-700">
+            Ver todos <span className="material-symbols-outlined inline text-[12px]">chevron_right</span>
           </button>
         </div>
-        <div className="grid gap-4 lg:grid-cols-3">
-          {projects.map((p, idx) => {
-            const chainId = idx + 1;
-            const chain = chainProjects?.[chainId];
-            return (
-              <ProjectCard
-                key={p.name}
-                project={p}
-                onSelect={() => setView("projects")}
-                realProgress={chain?.progress ?? null}
-                realPrice={chain?.priceXlm ?? null}
-                isLoading={isChainLoading}
-              />
-            );
-          })}
-        </div>
+        {catalogLoading ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-md">Loading project state…</div>
+        ) : catalog.projects.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-md">
+            {catalog.status === "empty" ? "No projects are registered." : "Project state unavailable."}
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-3">
+            {catalog.projects.map((project) => <ProjectCard key={project.id} project={project} />)}
+          </div>
+        )}
       </section>
 
       <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-        {/* My Projects Table */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-md p-5">
           <div className="mb-5 flex items-center justify-between">
             <div>
-              <h2 className="font-semibold text-slate-900 font-display">
-                Mis proyectos
-              </h2>
-              <p className="mt-1 text-xs text-slate-500">
-                Rendimiento de tus activos
-              </p>
+              <h2 className="font-semibold text-slate-900 font-display">Mi posición</h2>
+              <p className="mt-1 text-xs text-slate-500">get_portfolio + get_claimable</p>
             </div>
-            <button className="text-slate-400 hover:text-slate-600">
-              <span className="material-symbols-outlined text-[20px]">
-                more_horiz
-              </span>
+            <a href="/proof" className="text-xs font-semibold text-emerald-700 hover:underline">Public proof</a>
+          </div>
+          {!connected ? (
+            <button type="button" onClick={connect} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+              Conectar wallet para leer el portafolio
             </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[600px] text-left text-xs">
-              <thead className="border-b border-slate-200 text-slate-500">
-                <tr>
-                  <th className="pb-3 font-medium">Proyecto</th>
-                  <th className="pb-3 font-medium">Tokens</th>
-                  <th className="pb-3 font-medium">Inversión</th>
-                  <th className="pb-3 font-medium">Dividendos</th>
-                  <th className="pb-3 font-medium">Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {projects.map((p) => (
-                  <tr
-                    key={p.name}
-                    className="border-b border-slate-100"
-                  >
-                    <td className="py-4 font-medium text-slate-700">
-                      {p.name}
-                    </td>
-                    <td className="py-4 font-mono text-slate-600">
-                      {p.tokens}
-                    </td>
-                    <td className="py-4 font-mono text-slate-600">
-                      {p.invested} XLM
-                    </td>
-                    <td className="py-4 font-mono text-emerald-600">
-                      {p.dividends} XLM {dividendIsDemo && <span className="ml-1 px-1 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 text-[9px]">DEMO</span>}
-                    </td>
-                    <td className="py-4">
-                      <span className="text-emerald-600 flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[14px]">
-                          check
-                        </span>{" "}
-                        Activo
-                      </span>
-                    </td>
+          ) : portfolioLoading ? (
+            <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">Loading portfolio…</div>
+           ) : !portfolioReady ? (
+             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+               Portfolio or project state is incomplete. No fallback totals are shown.
+             </div>
+          ) : portfolio.positions.length === 0 ? (
+            <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">No positions returned.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[620px] text-left text-xs">
+                <thead className="border-b border-slate-200 text-slate-500">
+                  <tr>
+                    <th className="pb-3 font-medium">Proyecto</th>
+                    <th className="pb-3 font-medium">Tokens</th>
+                    <th className="pb-3 font-medium">Valor referencial</th>
+                    <th className="pb-3 font-medium">Claimable</th>
+                    <th className="pb-3 font-medium">Estado</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {portfolio.positions.map((position) => {
+                    const project = catalog.projects.find((item) => item.id === position.projectId);
+                    const positionValue = referentialReady && project?.price !== null && project?.price !== undefined
+                      ? position.tokenBalance * project.price
+                      : null;
+                    return (
+                      <tr key={position.projectId} className="border-b border-slate-100">
+                        <td className="py-4 font-medium text-slate-700">
+                          {project?.name ?? `Project #${position.projectId}`}
+                        </td>
+                        <td className="py-4 font-mono text-slate-600">{formatIntegerAmount(position.tokenBalance)}</td>
+                        <td className="py-4 font-mono text-slate-600">
+                          {positionValue === null ? "—" : formatStroopsAsXlm(positionValue)}
+                          <span className="ml-1 text-[9px] text-amber-700">EST.</span>
+                        </td>
+                        <td className="py-4 font-mono text-emerald-600">
+                          {formatStroopsAsXlm(portfolio.claimables[position.projectId] ?? null)}
+                        </td>
+                        <td className="py-4 text-emerald-700">
+                          {project?.active === true ? "Active" : project?.active === false ? "Inactive" : "Unavailable"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
-        {/* Activity */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-md p-5">
           <div className="mb-5 flex items-center justify-between">
-            <h2 className="font-semibold text-slate-900 font-display">
-              Actividad reciente
-            </h2>
-            <span className="material-symbols-outlined text-[16px] text-slate-400">
-              assignment
-            </span>
+            <h2 className="font-semibold text-slate-900 font-display">Protocol evidence</h2>
+            <span className="material-symbols-outlined text-[16px] text-slate-400">verified_user</span>
           </div>
-          <div className="flex flex-col gap-5 text-xs">
-            <div className="flex gap-3">
-              <div className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-emerald-50 text-emerald-600">
-                <span className="material-symbols-outlined text-[14px]">
-                  bolt
-                </span>
-              </div>
-              <div>
-                <p className="leading-5 text-slate-600">
-                  Recibiste{" "}
-                  <b className="text-emerald-700">2.1 XLM</b> de Solar Lima
-                  Norte
-                </p>
-                <span className="text-slate-400">Hace 2h</span>
-              </div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="text-sm font-semibold text-emerald-900">Stellar Testnet</div>
+            <div className="mt-2 font-mono text-[11px] leading-relaxed text-emerald-800">
+              Holder indexer status: {holderMetrics?.reconciled ? "Reconciled" : holderMetrics?.status ?? "Unavailable"}
             </div>
-            <div className="flex gap-3">
-              <div className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-orange-50 text-orange-600">
-                <span className="material-symbols-outlined text-[14px]">
-                  account_balance_wallet
-                </span>
-              </div>
-              <div>
-                <p className="leading-5 text-slate-600">
-                  Compraste <b className="text-slate-900">5 tokens</b> en Solar
-                  Arequipa
-                </p>
-                <span className="text-slate-400">Hace 1d</span>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <div className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-amber-50 text-amber-600">
-                <span className="material-symbols-outlined text-[14px]">
-                  wb_sunny
-                </span>
-              </div>
-              <div>
-                <p className="leading-5 text-slate-600">
-                  Solar San Martín generó{" "}
-                  <b className="text-slate-900">1,200 kWh</b>
-                </p>
-                <span className="text-slate-400">Hace 3d</span>
-              </div>
-            </div>
+            <a href="/proof" className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:underline">
+               View deployment, project, purchase, contract-inflow, and claim evidence
+
+              <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+            </a>
           </div>
+          <p className="mt-4 text-[11px] leading-relaxed text-slate-500">
+            The evidence page separates observed contract values from demo telemetry and estimates.
+          </p>
         </div>
       </div>
     </div>
@@ -747,513 +575,591 @@ function DashboardView({
 }
 
 function ClaimView({
-  signAndSend,
+  catalog,
+  portfolio,
+  portfolioLoading,
+  claimAll,
+  claimProject,
+  claiming,
   connected,
-  address,
+  connect,
+  receipt,
 }: {
-  signAndSend: (
-    contractId: string,
-    method: string,
-    args: unknown[]
-  ) => Promise<{ txHash: string; result?: unknown }>;
+  catalog: ProjectCatalog;
+  portfolio: InvestorPortfolio;
+  portfolioLoading: boolean;
+  claimAll: () => Promise<void>;
+  claimProject: (projectId: number) => Promise<void>;
+  claiming: boolean;
   connected: boolean;
-  address?: string | null;
+  connect: () => Promise<void>;
+  receipt: ClaimReceipt | null;
 }) {
-  const [claiming, setClaiming] = useState(false);
-  const [lastTxHash, setLastTxHash] = useState<string | null>(null);
-  const { readContract } = useWallet();
-  const [claimables, setClaimables] = useState<Record<number, string> | null>(null);
-  const [totalClaimable, setTotalClaimable] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!connected || !address) {
-      setClaimables(null);
-      setTotalClaimable(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const sdk = await import("@stellar/stellar-sdk");
-        const decode = (val: unknown) => {
-          try {
-            return (sdk as unknown as { scValToNative: (v: unknown) => unknown }).scValToNative(val as never);
-          } catch {
-            return val;
-          }
-        };
-        const ids = [1, 2, 3];
-        const map: Record<number, string> = {};
-        let total = BigInt(0);
-        for (const pid of ids) {
-          try {
-            const raw = await readContract(CONTRACT_ID, "get_claimable", [address, pid]);
-            const val = decode(raw);
-            const bi = BigInt(val as string | number | bigint);
-            total += bi;
-            map[pid] = (Number(bi) / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 });
-          } catch {
-            map[pid] = "—";
-          }
-        }
-        if (!cancelled) {
-          setClaimables(map);
-          setTotalClaimable((Number(total) / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 }));
-        }
-      } catch (e) {
-        console.warn("claimables fetch failed", e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [connected, address, readContract]);
-
-  const handleClaimAll = async () => {
-    if (!connected || !address) return;
-    setClaiming(true);
-    try {
-      // contract: claim_revenue(investor: Address, project_id: u64) — demo uses 1
-      const { txHash } = await signAndSend(CONTRACT_ID, "claim_revenue", [address, 1]);
-      setLastTxHash(txHash);
-    } catch (e) {
-      console.error("Claim failed:", e);
-    } finally {
-      setClaiming(false);
-    }
-  };
-
-  const handleClaimProject = async (projectId: number) => {
-    if (!connected || !address) return;
-    setClaiming(true);
-    try {
-      const normalized = projectId === 0 ? 1 : projectId;
-      const { txHash } = await signAndSend(CONTRACT_ID, "claim_revenue", [
-        address,
-        normalized,
-      ]);
-      setLastTxHash(txHash);
-    } catch (e) {
-      console.error("Claim failed:", e);
-    } finally {
-      setClaiming(false);
-    }
-  };
-
-  const displayTotal = connected && totalClaimable != null ? totalClaimable : "23.4";
-  const isDemo = !connected || totalClaimable == null;
+  const portfolioReady =
+    connected && catalog.status === "ready" && portfolio.status === "ready";
+  const total = portfolioReady
+    ? sumBigints(Object.values(portfolio.claimables))
+    : null;
+  const positiveClaims = portfolioReady
+    ? selectPositiveClaimable(
+        Object.entries(portfolio.claimables).map(([projectId, amount]) => ({
+          projectId: Number(projectId),
+          amount,
+        }))
+      )
+    : [];
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
       <div>
-        <p className="mb-2 text-xs font-medium uppercase tracking-[.18em] text-orange-600">
-          Distribución de ingresos
-        </p>
-        <h1 className="text-3xl font-bold text-slate-900 font-display">
-          Reclamar dividendos
-        </h1>
-        <p className="mt-2 text-sm text-slate-500">
-          Tus recompensas están listas para volver a tu wallet.
-        </p>
+        <p className="mb-2 text-xs font-medium uppercase tracking-[.18em] text-orange-600">Distribución de ingresos</p>
+        <h1 className="text-3xl font-bold text-slate-900 font-display">Reclamar ingresos</h1>
+        <p className="mt-2 text-sm text-slate-500">Solo se ofrecen saldos positivos leídos desde get_claimable.</p>
       </div>
 
-      {/* Total Card */}
       <div className="overflow-hidden rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 via-white to-emerald-50 p-6 relative">
-        {isDemo && (
-          <span className="absolute top-3 right-3 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-50 border border-amber-200 text-amber-700">
-            DEMO • Testnet
-          </span>
-        )}
-        <div className="text-sm text-slate-500">Total disponible</div>
-        <div className="mt-2 font-mono text-4xl font-bold text-slate-900">
-          {displayTotal}{" "}
-          <span className="text-xl text-orange-600">XLM</span>
+        <div className="text-sm text-slate-500">Total claimable</div>
+        <div className="mt-2 font-mono text-3xl font-bold text-slate-900">
+          {connected ? (total === null ? "—" : formatStroopsAsXlm(total)) : "—"}
         </div>
-        {!connected && (
-          <p className="mt-2 text-xs text-amber-700">Conecta tu wallet para ver dividendos reales. Valor mostrado es simulado.</p>
-        )}
+        {!connected ? (
+          <button type="button" onClick={connect} className="mt-4 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            Conectar wallet
+          </button>
+        ) : null}
         <button
-          onClick={handleClaimAll}
-          disabled={!connected || claiming}
-          className="mt-6 w-full bg-orange-600 font-semibold text-white hover:bg-orange-700 px-4 py-2 rounded-lg text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          type="button"
+          onClick={claimAll}
+           disabled={!portfolioReady || claiming || positiveClaims.length === 0}
+          className="mt-6 w-full bg-orange-600 font-semibold text-white hover:bg-orange-700 px-4 py-2 rounded-lg text-sm transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {claiming ? (
-            "Procesando..."
-          ) : (
-            <>
-              Reclamar todo
-              <span className="material-symbols-outlined text-[16px]">
-                arrow_upward
-              </span>
-            </>
-          )}
+          {claiming ? "Procesando..." : "Reclamar todo"}
         </button>
       </div>
 
-      {/* Breakdown */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-md divide-y divide-slate-100">
-        <div className="p-5 font-semibold text-slate-900 font-display">
-          Desglose por proyecto
-        </div>
-        {projects.map((p) => {
-          const pid = p.projectId === 0 ? 1 : p.projectId;
-          const real = claimables?.[pid];
-          const display = real != null ? real : p.dividends;
-          const demoBadge = !connected || claimables == null;
-          return (
-            <div key={p.name} className="flex items-center justify-between p-5">
-              <div>
-                <div className="font-medium text-slate-700">{p.name}</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  {p.energy} kWh generados {demoBadge && <span className="ml-1 px-1 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 text-[9px]">DEMO</span>}
+        <div className="p-5 font-semibold text-slate-900 font-display">Desglose por proyecto</div>
+        {!connected ? (
+          <div className="p-5 text-sm text-slate-500">Connect a wallet to read claimable balances.</div>
+        ) : portfolioLoading ? (
+          <div className="p-5 text-sm text-slate-500">Loading claimable state…</div>
+        ) : catalog.projectIds.length === 0 ? (
+          <div className="p-5 text-sm text-slate-500">No projects are available.</div>
+        ) : (
+          catalog.projectIds.map((projectId) => {
+            const project = catalog.projects.find((item) => item.id === projectId);
+            const amount = portfolio.claimables[projectId];
+            const claimable = amount !== undefined && amount > 0n;
+            return (
+              <div key={projectId} className="flex items-center justify-between gap-4 p-5">
+                <div>
+                  <div className="font-medium text-slate-700">{project?.name ?? `Project #${projectId}`}</div>
+                  <div className="mt-1 font-mono text-[10px] text-slate-400">Project #{projectId}</div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <span className="font-mono text-emerald-600">
+                    {amount === undefined ? "Unavailable" : formatStroopsAsXlm(amount)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => claimProject(projectId)}
+                     disabled={!claimable || claiming || !portfolioReady}
+                    className="border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Reclamar
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-4">
-                <span className="font-mono text-emerald-600">
-                  {display} XLM
-                </span>
-                <button
-                  onClick={() => handleClaimProject(p.projectId)}
-                  disabled={!connected || claiming}
-                  className="border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-                >
-                  Reclamar
-                </button>
-              </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
 
-      {/* Certificate after successful claim */}
-      {lastTxHash && (
+      {receipt ? (
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <span className="material-symbols-outlined text-emerald-600 text-[24px]">
-              check_circle
-            </span>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <div className="font-semibold text-emerald-800">
-                Transacción exitosa
-              </div>
-              <div className="text-xs text-emerald-600 font-mono">
-                {lastTxHash.slice(0, 16)}...
+              <div className="font-semibold text-emerald-800">Technical transaction receipt</div>
+              <div className="mt-1 text-xs text-emerald-700">
+                Project #{receipt.projectId} · {formatStroopsAsXlm(receipt.amount)}
               </div>
             </div>
+            <a href={TX_EXPLORER(receipt.txHash)} target="_blank" rel="noopener noreferrer" className="text-xs font-semibold text-emerald-700 hover:underline">
+              View transaction
+            </a>
           </div>
-          <PdfCertificate
-            data={{
-              projectName: "NIKO SUN Dividendos",
-              location: "Red Stellar Soroban",
-              capacity: "Multi-proyecto",
-              tokenAmount: "45",
-              pricePaid: "23.4 XLM",
-              walletAddress: "—",
-              txHash: lastTxHash,
-            }}
-          />
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
-function MetricsView() {
+function MetricsView({ catalog, catalogLoading }: { catalog: ProjectCatalog; catalogLoading: boolean }) {
+  const complete = catalog.projects.filter((project) => project.stateComplete);
+  const completeState = catalog.status === "ready" && complete.length === catalog.projectIds.length;
+  const values = completeState
+    ? {
+        minted: sumBigints(complete.map((project) => project.minted ?? 0n)),
+        energy: sumBigints(complete.map((project) => project.totalEnergyKwh ?? 0n)),
+        revenue: sumBigints(complete.map((project) => project.totalRevenue ?? 0n)),
+        sales: sumBigints(complete.map((project) => project.salesBalance ?? 0n)),
+      }
+    : null;
+
   return (
     <div className="flex flex-col gap-7">
       <div>
-        <h1 className="mb-2 text-3xl font-bold text-slate-900 font-display">
-          Métricas
-        </h1>
-        <p className="mb-7 text-sm text-slate-500">
-          Transparencia energética y financiera de la red NIKO SUN.
+        <h1 className="mb-2 text-3xl font-bold text-slate-900 font-display">Métricas on-chain</h1>
+        <p className="mb-7 text-sm text-slate-500">Solo agregados de get_project y get_sales_balance; sin actividad o energía demo.</p>
+      </div>
+      <div className="grid gap-4 md:grid-cols-4">
+        <StatCard icon="token" label="Tokens minted" value={catalogLoading ? "…" : values ? formatIntegerAmount(values.minted) : "—"} badge={!catalogLoading && !values ? "Unavailable" : undefined} />
+        <StatCard icon="bolt" label="Energy recorded" value={catalogLoading ? "…" : values ? `${formatIntegerAmount(values.energy)} kWh` : "—"} badge={!catalogLoading && !values ? "Unavailable" : undefined} />
+        <StatCard icon="account_balance" label="Total contract inflows (sales + deposits)" value={catalogLoading ? "…" : values ? formatStroopsAsXlm(values.revenue) : "—"} badge={!catalogLoading && !values ? "Unavailable" : undefined} />
+        <StatCard icon="payments" label="Sales balance" value={catalogLoading ? "…" : values ? formatStroopsAsXlm(values.sales) : "—"} badge={!catalogLoading && !values ? "Unavailable" : undefined} />
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-md">
+        <h2 className="font-display text-[16px] font-bold text-slate-900">Evidence boundary</h2>
+        <p className="mt-2 text-[13px] leading-relaxed text-slate-600">
+          Zero energy is displayed as an observed zero when the contract read succeeds. Telemetry charts, physical capacity, CO₂ estimates, and fiat values are not presented as verified metrics.
         </p>
-      </div>
-      <div className="grid gap-4 md:grid-cols-3">
-        <StatCard
-          icon="power"
-          label="Energía generada"
-          value="1.2M kWh"
-          change="+18.4%"
-          demo
-        />
-        <StatCard
-          icon="payments"
-          label="Revenue distribuido"
-          value="340 XLM"
-          change="+8.2%"
-          demo
-        />
-        <StatCard
-          icon="eco"
-          label="CO₂ evitado"
-          value="628 t"
-          change="+14.1%"
-          demo
-        />
-      </div>
-      <div className="bg-white border border-slate-200 rounded-xl shadow-md mt-5 p-6">
-        <div className="mb-5 flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold text-slate-900 font-display">
-              Generación de energía
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              Últimos 30 días — todos los proyectos
-            </p>
-          </div>
-          <span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-700 border border-amber-200">
-            DEMO • Simulado
-          </span>
-        </div>
-        <MiniChart />
-        <div className="mt-4 flex justify-between text-[10px] text-slate-400">
-          <span>01 AGO</span>
-          <span>15 AGO</span>
-          <span>30 AGO</span>
-        </div>
+        <a href="/proof" className="mt-4 inline-flex text-xs font-semibold text-emerald-700 hover:underline">Open public proof</a>
       </div>
     </div>
   );
 }
 
-function AdminView() {
-  const { signAndSend, connected, address } = useWallet();
-  const [creating, setCreating] = useState(false);
-  const [depositing, setDepositing] = useState<number | null>(null);
-  const [withdrawing, setWithdrawing] = useState<number | null>(null);
-  const [form, setForm] = useState({
-    name: "",
-    supply: "",
-    price: "",
-    minPurchase: "",
-  });
+function AdminView({
+  catalog,
+  refreshCatalog,
+}: {
+  catalog: ProjectCatalog;
+  refreshCatalog: () => Promise<void>;
+}) {
+  const { signAndSend, connected, address, connect } = useWallet();
+  const [ownedIds, setOwnedIds] = useState<number[] | null>(null);
+  const [ownershipError, setOwnershipError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [status, setStatus] = useState("");
+  const [form, setForm] = useState({ name: "", supply: "", priceStroops: "", minPurchase: "" });
+  const [amounts, setAmounts] = useState<Record<number, { deposit: string; withdraw: string }>>({});
+  const { readContract } = useWallet();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!connected || !address) {
+      setOwnedIds(null);
+      setOwnershipError(null);
+      return;
+    }
+    setOwnedIds(null);
+    setOwnershipError(null);
+    void readUserProjectIds(readContract, CONTRACT_ID, address)
+      .then((ids) => {
+        if (!cancelled) setOwnedIds(ids);
+      })
+      .catch(() => {
+        if (!cancelled) setOwnershipError("Ownership state is unavailable.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [address, connected, readContract]);
+
+  const ownedSet = useMemo(() => new Set(ownedIds ?? []), [ownedIds]);
+  const ownedProjects = catalog.projects.filter(
+    (project) => ownedSet.has(project.id) && project.creator === address
+  );
+  const unverifiedOwnedIds = (ownedIds ?? []).filter(
+    (id) => !ownedProjects.some((project) => project.id === id)
+  );
+  const ownershipVerified =
+    connected &&
+    address !== null &&
+    ownedIds !== null &&
+    ownershipError === null &&
+    catalog.status === "ready" &&
+    catalog.projects.length === catalog.projectIds.length &&
+    ownedProjects.every((project) => project.stateComplete) &&
+    unverifiedOwnedIds.length === 0 &&
+    ownedProjects.length === ownedIds.length;
+
+  const supply = parseUnsignedBigInt(form.supply);
+  const price = parseTransferAmount(form.priceStroops);
+  const minPurchase = parseUnsignedBigInt(form.minPurchase);
+  const createValid =
+    connected &&
+    form.name.trim().length > 0 &&
+    supply !== null &&
+    supply > 0n &&
+    price !== null &&
+    price > 0n &&
+    minPurchase !== null &&
+    minPurchase > 0n &&
+    minPurchase <= supply;
 
   const handleCreateProject = async () => {
-    if (!connected || !address || !form.name) return;
-    setCreating(true);
+    if (!createValid || !address || supply === null || price === null || minPurchase === null) return;
+    setBusy("create");
+    setStatus("");
     try {
       await signAndSend(CONTRACT_ID, "create_project", [
         address,
-        form.name,
-        parseInt(form.supply) || 10000,
-        parseInt(form.price) || 10,
-        parseInt(form.minPurchase) || 1,
+        form.name.trim(),
+        supply,
+        price,
+        minPurchase,
       ]);
-      setForm({ name: "", supply: "", price: "", minPurchase: "" });
-    } catch (e) {
-      console.error("Create project failed:", e);
+      setForm({ name: "", supply: "", priceStroops: "", minPurchase: "" });
+      setStatus("Project created. Refreshing on-chain state…");
+      await refreshCatalog();
+    } catch (cause) {
+      setStatus(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setCreating(false);
+      setBusy(null);
     }
   };
 
-  const handleDepositRevenue = async (projectId: number) => {
-    if (!connected || !address) return;
-    setDepositing(projectId);
+  const updateAmount = (
+    projectId: number,
+    field: "deposit" | "withdraw",
+    value: string
+  ) => {
+    setAmounts((current) => ({
+      ...current,
+      [projectId]: {
+        deposit: current[projectId]?.deposit ?? "",
+        withdraw: current[projectId]?.withdraw ?? "",
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleDeposit = async (project: ContractProject) => {
+    if (!ownershipVerified || !connected || !address || project.creator !== address || !ownedSet.has(project.id)) return;
+    const amount = parseTransferAmount(amounts[project.id]?.deposit ?? "");
+    if (amount === null || amount <= 0n || project.active !== true || (project.minted ?? 0n) <= 0n) return;
+    setBusy(`deposit-${project.id}`);
+    setStatus("");
     try {
-      // contract: deposit_revenue(depositor: Address, project_id: u64, amount: u128, energy_kwh_delta: u128)
-      const amountStroops = BigInt(10) * BigInt(1_000_000); // 10 XLM in stroops
-      const normalized = projectId === 0 ? 1 : projectId;
-      await signAndSend(CONTRACT_ID, "deposit_revenue", [
-        address,
-        normalized,
-        amountStroops,
-        BigInt(0), // energy_kwh_delta — no IoT yet
-      ]);
-    } catch (e) {
-      console.error("Deposit revenue failed:", e);
+      await signAndSend(CONTRACT_ID, "deposit_revenue", [address, project.id, amount, 0n]);
+      updateAmount(project.id, "deposit", "");
+      setStatus(`Contract inflow deposited for project #${project.id}.`);
+      await refreshCatalog();
+    } catch (cause) {
+      setStatus(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setDepositing(null);
+      setBusy(null);
     }
   };
 
-  const handleWithdrawSales = async (projectId: number) => {
-    if (!connected || !address) return;
-    setWithdrawing(projectId);
+  const handleWithdraw = async (project: ContractProject) => {
+    if (!ownershipVerified || !connected || !address || project.creator !== address || !ownedSet.has(project.id)) return;
+    const amount = parseTransferAmount(amounts[project.id]?.withdraw ?? "");
+    if (amount === null || amount <= 0n || project.salesBalance === null || amount > project.salesBalance) return;
+    setBusy(`withdraw-${project.id}`);
+    setStatus("");
     try {
-      // contract: withdraw_sales(caller: Address, project_id: u64, amount: u128)
-      const amountStroops = BigInt(5) * BigInt(1_000_000); // 5 XLM in stroops
-      const normalized = projectId === 0 ? 1 : projectId;
-      await signAndSend(CONTRACT_ID, "withdraw_sales", [
-        address,
-        normalized,
-        amountStroops,
-      ]);
-    } catch (e) {
-      console.error("Withdraw sales failed:", e);
+      await signAndSend(CONTRACT_ID, "withdraw_sales", [address, project.id, amount]);
+      updateAmount(project.id, "withdraw", "");
+      setStatus(`Sales withdrawal confirmed for project #${project.id}.`);
+      await refreshCatalog();
+    } catch (cause) {
+      setStatus(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setWithdrawing(null);
+      setBusy(null);
     }
   };
+
+  const ownedSales = sumOwnedProjectAmounts(
+    ownedProjects,
+    "salesBalance",
+    ownershipVerified
+  );
+  const ownedRevenue = sumOwnedProjectAmounts(
+    ownedProjects,
+    "totalRevenue",
+    ownershipVerified
+  );
 
   return (
     <div className="flex flex-col gap-7">
       <div>
-        <p className="mb-2 text-xs font-medium uppercase tracking-[.18em] text-emerald-600">
-          Creator console
-        </p>
-        <h1 className="text-3xl font-bold text-slate-900 font-display">
-          Panel de administración
-        </h1>
-        <p className="mt-2 text-sm text-slate-500">
-          Gestiona tus proyectos y distribuye revenue a holders.
-        </p>
+        <p className="mb-2 text-xs font-medium uppercase tracking-[.18em] text-emerald-600">Creator console</p>
+        <h1 className="text-3xl font-bold text-slate-900 font-display">Panel de administración</h1>
+        <p className="mt-2 text-sm text-slate-500">La propiedad se verifica con get_user_projects y el creator on-chain.</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <StatCard icon="wb_sunny" label="Tus proyectos" value="3" demo />
+        <StatCard
+          icon="folder_open"
+          label="Owned projects"
+          value={connected ? ownershipVerified ? String(ownedIds?.length ?? 0) : ownedIds === null ? "…" : "—" : "—"}
+          badge={connected && ownedIds !== null && !ownershipVerified ? (catalog.status === "partial" ? "Partial" : "Unavailable") : undefined}
+        />
         <StatCard
           icon="payments"
-          label="Total invertido"
-          value="1,250 XLM"
-          demo
+          label="Owned sales balance"
+          value={connected ? ownedSales === null ? "—" : formatStroopsAsXlm(ownedSales) : "—"}
+          badge={connected && !ownershipVerified ? (catalog.status === "partial" ? "Partial" : "Unavailable") : undefined}
         />
         <StatCard
           icon="bolt"
-          label="Revenue depositado"
-          value="340 XLM"
-          demo
+          label="Owned total contract inflows (sales + deposits)"
+          value={connected ? ownedRevenue === null ? "—" : formatStroopsAsXlm(ownedRevenue) : "—"}
+          badge={connected && !ownershipVerified ? (catalog.status === "partial" ? "Partial" : "Unavailable") : undefined}
         />
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[1fr_1.3fr]">
-        {/* Create Project Form */}
+      <div className="grid gap-5 lg:grid-cols-[1fr_1.4fr]">
         <div className="bg-white border border-slate-200 rounded-xl shadow-md p-5">
-          <h2 className="mb-5 font-semibold text-slate-900 font-display">
-            Crear nuevo proyecto
-          </h2>
+          <h2 className="mb-5 font-semibold text-slate-900 font-display">Crear nuevo proyecto</h2>
           <div className="flex flex-col gap-4">
             <label className="text-xs text-slate-500">
               Nombre del proyecto
               <input
-                className="mt-2 w-full border border-slate-200 rounded-lg bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-                placeholder="Ej. Solar Cusco Sur"
+                className="mt-2 w-full border border-slate-200 rounded-lg bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-emerald-500"
+                placeholder="Nombre exacto"
                 value={form.name}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, name: e.target.value }))
-                }
+                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
               />
             </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="text-xs text-slate-500">
-                Supply total
-                <input
-                  className="mt-2 w-full border border-slate-200 rounded-lg bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-                  placeholder="10,000"
-                  value={form.supply}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, supply: e.target.value }))
-                  }
-                />
-              </label>
-              <label className="text-xs text-slate-500">
-                Precio por token
-                <input
-                  className="mt-2 w-full border border-slate-200 rounded-lg bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-                  placeholder="10 XLM"
-                  value={form.price}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, price: e.target.value }))
-                  }
-                />
-              </label>
-            </div>
             <label className="text-xs text-slate-500">
-              Compra mínima
+              Supply total (tokens)
               <input
-                className="mt-2 w-full border border-slate-200 rounded-lg bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-                placeholder="1 token"
+                inputMode="numeric"
+                className="mt-2 w-full border border-slate-200 rounded-lg bg-white px-3 py-2.5 font-mono text-sm text-slate-900 outline-none focus:border-emerald-500"
+                placeholder="100000"
+                value={form.supply}
+                onChange={(event) => setForm((current) => ({ ...current, supply: event.target.value }))}
+              />
+            </label>
+            <label className="text-xs text-slate-500">
+              Precio por token (stroops)
+              <input
+                inputMode="numeric"
+                className="mt-2 w-full border border-slate-200 rounded-lg bg-white px-3 py-2.5 font-mono text-sm text-slate-900 outline-none focus:border-emerald-500"
+                placeholder="10000000"
+                value={form.priceStroops}
+                onChange={(event) => setForm((current) => ({ ...current, priceStroops: event.target.value }))}
+              />
+              <span className="mt-1 block font-mono text-[10px] text-slate-400">
+                {price === null ? "Enter a positive integer ≤ i128 max" : `${formatStroopsAsXlm(price)} per token`}
+              </span>
+            </label>
+            <label className="text-xs text-slate-500">
+              Compra mínima (tokens)
+              <input
+                inputMode="numeric"
+                className="mt-2 w-full border border-slate-200 rounded-lg bg-white px-3 py-2.5 font-mono text-sm text-slate-900 outline-none focus:border-emerald-500"
+                placeholder="1"
                 value={form.minPurchase}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, minPurchase: e.target.value }))
-                }
+                onChange={(event) => setForm((current) => ({ ...current, minPurchase: event.target.value }))}
               />
             </label>
             <button
+              type="button"
               onClick={handleCreateProject}
-              disabled={!connected || creating}
-              className="mt-2 bg-emerald-600 text-white hover:bg-emerald-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              disabled={!createValid || busy !== null}
+              className="mt-2 bg-emerald-600 text-white hover:bg-emerald-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {creating ? (
-                "Creando..."
-              ) : (
-                <>
-                  Crear proyecto
-                  <span className="material-symbols-outlined text-[16px]">
-                    arrow_upward
-                  </span>
-                </>
-              )}
+              {busy === "create" ? "Creando…" : "Crear proyecto"}
             </button>
           </div>
         </div>
 
-        {/* Admin Project List */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-md p-5">
-          <div className="mb-5 flex items-center justify-between">
-            <h2 className="font-semibold text-slate-900 font-display">
-              Mis proyectos
-            </h2>
-            <button className="border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors">
-              Exportar
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <h2 className="font-semibold text-slate-900 font-display">Owned projects</h2>
+            <span
+              className={cn(
+                "rounded-full border px-2.5 py-1 font-mono text-[10px] font-bold",
+                ownershipVerified
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-amber-200 bg-amber-50 text-amber-700"
+              )}
+            >
+              {ownershipVerified
+                ? "OWNERSHIP VERIFIED"
+                : ownershipError
+                  ? "OWNERSHIP UNAVAILABLE"
+                  : ownedIds === null
+                    ? "OWNERSHIP PENDING"
+                    : "OWNERSHIP NOT VERIFIED"}
+            </span>
+          </div>
+
+          {!connected ? (
+            <button type="button" onClick={connect} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+              Conectar wallet
             </button>
-          </div>
-          <div className="flex flex-col gap-3">
-            {projects.map((p) => (
-              <div
-                key={p.name}
-                className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4"
-              >
-                <div>
-                  <div className="font-medium text-slate-700">{p.name}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {p.capacity} — {p.progress}% vendido <span className="ml-1 px-1 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 text-[9px]">DEMO</span>
+          ) : ownershipError ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{ownershipError}</div>
+          ) : ownedIds === null ? (
+            <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">Loading get_user_projects…</div>
+          ) : !ownershipVerified ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              Ownership is not verified. Complete get_user_projects, matching creator state, and the full project catalog before enabling owned-project actions.
+              {unverifiedOwnedIds.length > 0 ? (
+                <span className="mt-2 block">Unverified project IDs: {unverifiedOwnedIds.join(", ")}.</span>
+              ) : null}
+            </div>
+          ) : ownedProjects.length === 0 && unverifiedOwnedIds.length === 0 ? (
+            <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">No owned projects returned.</div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {ownedProjects.map((project) => {
+                const deposit = parseTransferAmount(amounts[project.id]?.deposit ?? "");
+                const withdraw = parseTransferAmount(amounts[project.id]?.withdraw ?? "");
+                const depositValid = deposit !== null && deposit > 0n && project.active === true && (project.minted ?? 0n) > 0n;
+                const withdrawValid = withdraw !== null && withdraw > 0n && project.salesBalance !== null && withdraw <= project.salesBalance;
+                return (
+                  <div key={project.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-slate-800">{project.name ?? `Project #${project.id}`}</div>
+                        <div className="mt-1 font-mono text-[10px] text-slate-500">
+                          ID {project.id} · creator {project.creator?.slice(0, 6)}…{project.creator?.slice(-4)} · sales {formatStroopsAsXlm(project.salesBalance)}
+                        </div>
+                      </div>
+                      <span className="rounded-full border border-emerald-200 bg-white px-2 py-1 text-[9px] font-mono font-bold text-emerald-700">ON-CHAIN OWNER</span>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <label className="text-[11px] text-slate-500">
+                        Contract inflow amount (stroops)
+                        <input
+                          inputMode="numeric"
+                          value={amounts[project.id]?.deposit ?? ""}
+                          onChange={(event) => updateAmount(project.id, "deposit", event.target.value)}
+                          placeholder="1000000"
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs text-slate-900 outline-none focus:border-emerald-500"
+                        />
+                        <span className="mt-1 block text-[9px] text-slate-400">{deposit === null ? "Positive integer required" : formatStroopsAsXlm(deposit)}</span>
+                      </label>
+                      <label className="text-[11px] text-slate-500">
+                        Withdraw amount (stroops)
+                        <input
+                          inputMode="numeric"
+                          value={amounts[project.id]?.withdraw ?? ""}
+                          onChange={(event) => updateAmount(project.id, "withdraw", event.target.value)}
+                          placeholder="1000000"
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs text-slate-900 outline-none focus:border-emerald-500"
+                        />
+                        <span className="mt-1 block text-[9px] text-slate-400">{withdraw === null ? "Cannot exceed sales balance" : formatStroopsAsXlm(withdraw)}</span>
+                      </label>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleDeposit(project)}
+                        disabled={!depositValid || busy !== null}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {busy === `deposit-${project.id}` ? "Depositing…" : "Deposit contract inflow"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleWithdraw(project)}
+                        disabled={!withdrawValid || busy !== null}
+                        className="rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {busy === `withdraw-${project.id}` ? "Withdrawing…" : "Withdraw sales"}
+                      </button>
+                    </div>
                   </div>
+                );
+              })}
+
+              {unverifiedOwnedIds.map((projectId) => (
+                <div key={projectId} className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                  Project #{projectId} is listed by get_user_projects but its current creator state is unavailable or does not match this wallet. Actions are disabled.
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleDepositRevenue(p.projectId)}
-                    disabled={!connected || depositing === p.projectId}
-                    className="border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-                  >
-                    {depositing === p.projectId ? "..." : "Depositar"}
-                  </button>
-                  <button
-                    onClick={() => handleWithdrawSales(p.projectId)}
-                    disabled={!connected || withdrawing === p.projectId}
-                    className="border border-amber-200 bg-white text-amber-600 hover:bg-amber-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-                  >
-                    {withdrawing === p.projectId ? "..." : "Retirar"}
-                  </button>
-                  <button className="text-slate-400 hover:text-slate-600">
-                    <span className="material-symbols-outlined text-[18px]">
-                      more_horiz
-                    </span>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
+
+          {status ? <p className="mt-4 break-words rounded-lg bg-slate-100 p-3 font-mono text-[11px] text-slate-700">{status}</p> : null}
         </div>
       </div>
     </div>
   );
 }
 
-/* ── Main Page ── */
-
 export default function Page() {
-  const { address, balance, connected, connect, signAndSend } = useWallet();
+  const { address, balance, connected, connect, disconnect, signAndSend, readContract } = useWallet();
   const [view, setView] = useState<View>("dashboard");
-  const [toast, setToast] = useState("");
+  const [claiming, setClaiming] = useState(false);
+  const [receipt, setReceipt] = useState<ClaimReceipt | null>(null);
+  const [claimError, setClaimError] = useState<string | null>(null);
+  const { metrics: holderMetrics } = useHolderMetrics();
+  const {
+    catalog,
+    portfolio,
+    catalogLoading,
+    portfolioLoading,
+    refreshCatalog,
+    refreshPortfolio,
+  } = useDashboardContractState(readContract, address);
 
-  const notify = useCallback((message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast(""), 3500);
-  }, []);
+  const positiveClaims = useMemo(
+    () =>
+      selectPositiveClaimable(
+        Object.entries(portfolio.claimables).map(([projectId, amount]) => ({
+          projectId: Number(projectId),
+          amount,
+        }))
+      ),
+    [portfolio.claimables]
+  );
 
-  const title = nav.find((n) => n.id === view)?.label ?? "Dashboard";
+  const nextProjectId =
+    catalog.nextProjectId !== null &&
+    catalog.nextProjectId <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(catalog.nextProjectId)
+      : null;
+  const totalMintedValue = deriveTotalMinted(catalog);
+  const totalMinted = totalMintedValue === null ? null : totalMintedValue.toString();
+
+  const claimAll = useCallback(async () => {
+    if (!connected || !address || positiveClaims.length === 0) return;
+    setClaiming(true);
+    setClaimError(null);
+    setReceipt(null);
+    try {
+      for (const position of positiveClaims) {
+        const result = await signAndSend(CONTRACT_ID, "claim_revenue", [address, position.projectId]);
+        setReceipt({ projectId: position.projectId, amount: position.amount, txHash: result.txHash });
+      }
+    } catch (cause) {
+      setClaimError(cause instanceof Error ? cause.message : "The claim could not be confirmed.");
+    } finally {
+      await refreshPortfolio();
+      setClaiming(false);
+    }
+  }, [address, connected, positiveClaims, refreshPortfolio, signAndSend]);
+
+  const claimProject = useCallback(
+    async (projectId: number) => {
+      if (!connected || !address) return;
+      const position = positiveClaims.find((item) => item.projectId === projectId);
+      if (!position) return;
+      setClaiming(true);
+      setClaimError(null);
+      setReceipt(null);
+      try {
+        const result = await signAndSend(CONTRACT_ID, "claim_revenue", [address, projectId]);
+        setReceipt({ projectId, amount: position.amount, txHash: result.txHash });
+      } catch (cause) {
+        setClaimError(cause instanceof Error ? cause.message : "The claim could not be confirmed.");
+      } finally {
+        await refreshPortfolio();
+        setClaiming(false);
+      }
+    },
+    [address, connected, positiveClaims, refreshPortfolio, signAndSend]
+  );
+
+  const title = nav.find((item) => item.id === view)?.label ?? "Dashboard";
 
   return (
     <main className="min-h-screen bg-surface text-slate-100">
@@ -1267,97 +1173,89 @@ export default function Page() {
           connect={connect}
         />
         <div className="min-w-0 flex-1 relative">
-          {/* Ambient glow effects - matching landing page */}
           <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-[900px] h-[500px] bg-gradient-to-b from-amber-200/20 via-emerald-100/30 to-transparent blur-[120px] pointer-events-none -z-10" />
-          <div className="absolute top-48 right-10 w-96 h-96 bg-emerald-200/20 blur-[140px] pointer-events-none -z-10" />
-          {/* Top Header */}
           <header className="flex h-[76px] items-center justify-between border-b border-slate-200 bg-white/90 backdrop-blur-xl px-6 lg:px-10">
             <div className="flex items-center gap-3">
-              <div className="md:hidden">
-                <Logo />
-              </div>
+              <div className="md:hidden"><Logo /></div>
               <span className="hidden text-xs text-slate-500 md:block font-body">
-                App /{" "}
-                <span className="text-slate-700">{title}</span>
+                App / <span className="text-slate-700">{title}</span>
               </span>
             </div>
             <div className="flex items-center gap-3">
               <div className="hidden items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] text-emerald-700 sm:flex">
-                <span className="size-1.5 rounded-full bg-emerald-500" />{" "}
-                Testnet
+                <span className="size-1.5 rounded-full bg-emerald-500" /> Stellar Testnet
               </div>
               <button
-                onClick={() =>
-                  connected
-                    ? notify(`Wallet conectada: ${address?.slice(0, 4)}...${address?.slice(-4)}`)
-                    : connect()
-                }
+                type="button"
+                onClick={connected ? disconnect : connect}
                 className="h-9 bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 rounded-lg transition-colors flex items-center gap-2"
               >
-                <span className="material-symbols-outlined text-[16px]">
-                  account_balance_wallet
-                </span>
-                {connected
-                  ? `${address?.slice(0, 4)}...${address?.slice(-4)}`
-                  : "Conectar wallet"}
-              </button>
-              <button className="text-slate-500 md:hidden">
-                <span className="material-symbols-outlined text-[20px]">
-                  menu
-                </span>
+                <span className="material-symbols-outlined text-[16px]">account_balance_wallet</span>
+                {connected && address ? "Disconnect" : "Conectar wallet"}
               </button>
             </div>
           </header>
 
-          {/* Content */}
           <div className="mx-auto max-w-[1500px] p-6 pb-28 lg:p-10 lg:pb-10">
-            {view === "dashboard" && (
+            {claimError ? (
+              <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                Claim failed: {claimError}
+              </div>
+            ) : null}
+            {view === "dashboard" ? (
               <DashboardView
                 setView={setView}
-                signAndSend={signAndSend}
+                catalog={catalog}
+                portfolio={portfolio}
+                catalogLoading={catalogLoading}
+                portfolioLoading={portfolioLoading}
+                claimAll={claimAll}
+                claiming={claiming}
                 connected={connected}
-                address={address}
+                connect={connect}
+                nextProjectId={nextProjectId}
+                totalMinted={totalMinted}
+                holderMetrics={holderMetrics}
               />
-            )}
-            {view === "projects" && (
+            ) : null}
+
+            {view === "projects" ? (
               <div>
-                <h1 className="mb-2 text-3xl font-bold text-slate-900 font-display">
-                  Mis proyectos
-                </h1>
-                <p className="mb-7 text-sm text-slate-500">
-                  Explora oportunidades solares y sigue tu participación.
-                </p>
-                <div className="grid gap-4 lg:grid-cols-3">
-                  {projects.map((p) => (
-                    <ProjectCard
-                      key={p.name}
-                      project={p}
-                      onSelect={() => notify(`Abriendo ${p.name}`)}
-                    />
-                  ))}
-                </div>
+                <h1 className="mb-2 text-3xl font-bold text-slate-900 font-display">Proyectos on-chain</h1>
+                <p className="mb-7 text-sm text-slate-500">Solo project IDs derivados y leídos desde el contrato.</p>
+                {catalogLoading ? (
+                  <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-md">Loading project state…</div>
+                ) : catalog.projects.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-md">
+                    {catalog.status === "empty" ? "No projects are registered." : "Project state unavailable."}
+                  </div>
+                ) : (
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    {catalog.projects.map((project) => <ProjectCard key={project.id} project={project} />)}
+                  </div>
+                )}
               </div>
-            )}
-            {view === "claim" && (
+            ) : null}
+
+            {view === "claim" ? (
               <ClaimView
-                signAndSend={signAndSend}
+                catalog={catalog}
+                portfolio={portfolio}
+                portfolioLoading={portfolioLoading}
+                claimAll={claimAll}
+                claimProject={claimProject}
+                claiming={claiming}
                 connected={connected}
-                address={address}
+                connect={connect}
+                receipt={receipt}
               />
-            )}
-            {view === "admin" && <AdminView />}
-            {view === "metrics" && <MetricsView />}
+            ) : null}
+
+            {view === "admin" ? <AdminView catalog={catalog} refreshCatalog={refreshCatalog} /> : null}
+            {view === "metrics" ? <MetricsView catalog={catalog} catalogLoading={catalogLoading} /> : null}
           </div>
         </div>
       </div>
-
-      {/* Toast */}
-      {toast && (
-        <div className="fixed bottom-5 right-5 z-[60] flex items-center gap-3 rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm text-emerald-700 shadow-xl">
-          <span className="material-symbols-outlined text-[16px]">check</span>
-          {toast}
-        </div>
-      )}
     </main>
   );
 }

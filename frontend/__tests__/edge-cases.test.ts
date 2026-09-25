@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { parseXlmToStroops } from "@/lib/amounts";
 
 // ═══════════════════════════════════════════════════════════
 // UNIT: Edge cases for the complete investment flow
@@ -6,29 +7,26 @@ import { describe, it, expect } from "vitest";
 
 describe("Flow edge cases", () => {
   it("insufficient balance detected before signing", () => {
-    const walletBalance = "500";
-    const costXlm = 1000;
-    const balanceNum = parseFloat(walletBalance.replace(/,/g, ""));
-    expect(balanceNum < costXlm).toBe(true);
+    const walletBalance = parseXlmToStroops("500");
+    const costXlm = parseXlmToStroops("1000");
+    expect(walletBalance !== null && costXlm !== null && walletBalance < costXlm).toBe(true);
   });
 
   it("sufficient balance passes check", () => {
-    const walletBalance = "5,000";
-    const costXlm = 1000;
-    const balanceNum = parseFloat(walletBalance.replace(/,/g, ""));
-    expect(balanceNum >= costXlm).toBe(true);
+    const walletBalance = parseXlmToStroops("5000");
+    const costXlm = parseXlmToStroops("1000");
+    expect(walletBalance !== null && costXlm !== null && walletBalance >= costXlm).toBe(true);
   });
 
-  it("formatted balance parses correctly", () => {
-    const balance = "10,000.50";
-    const parsed = parseFloat(balance.replace(/,/g, ""));
-    expect(parsed).toBe(10000.5);
+  it("formatted balance parses exactly", () => {
+    const balance = parseXlmToStroops("10000.5000000");
+    expect(balance).toBe(100005000000n);
   });
 
   it("zero balance is insufficient", () => {
-    const balance = "0";
-    const costXlm = 10;
-    expect(parseFloat(balance) < costXlm).toBe(true);
+    const balance = parseXlmToStroops("0");
+    const costXlm = parseXlmToStroops("10");
+    expect(balance !== null && costXlm !== null && balance < costXlm).toBe(true);
   });
 
   it("minimum token count is 1", () => {

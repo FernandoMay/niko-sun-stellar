@@ -8,18 +8,11 @@ describe("Investment calculator", () => {
   const PRICE_PER_TOKEN = 10; // XLM
   const APY = 12.5; // percent
   const TOKEN_WP = 1.5; // Wp per token
-  const XLM_TO_USD = 0.13;
 
   it("calculates cost in XLM", () => {
     const tokenCount = 100;
     const costXlm = tokenCount * PRICE_PER_TOKEN;
     expect(costXlm).toBe(1000);
-  });
-
-  it("calculates cost in USD", () => {
-    const costXlm = 1000;
-    const costUsd = costXlm * XLM_TO_USD;
-    expect(costUsd).toBeCloseTo(130, 0);
   });
 
   it("calculates capacity in Wp", () => {
