@@ -6,8 +6,8 @@ const steps = [
     icon: "account_balance_wallet",
     title: "Conecta tu Wallet",
     description:
-      "Utiliza Freighter, Lobstr, o cualquier billetera compatible con la red Stellar y contratos inteligentes Soroban. Sin KYC invasivo para comenzar en montos micro-inversión.",
-    tag: "SOPORTA FREIGHTER & LOBSTR",
+      "Conecta Freighter en Stellar Testnet. La llave privada permanece en tu wallet; la aplicación solo solicita la firma de la transacción.",
+    tag: "FREIGHTER + SOROBAN",
     tagColor: "text-orange-600",
     iconBg: "bg-orange-50 border-orange-200 text-orange-600",
     glow: "bg-orange-100",
@@ -15,10 +15,10 @@ const steps = [
   {
     num: "02",
     icon: "solar_power",
-    title: "Elige un Proyecto",
+    title: "Elige un Proyecto On-chain",
     description:
-      "Explora parques solares auditados física y legalmente en Perú y Chile. Monitorea su capacidad de irradiación, ubicación geográfica y contratos de compra PPA en tiempo real.",
-    tag: "AUDITORÍA LEGAL ON-CHAIN",
+      "Consulta nombre, precio, supply, tokens acuñados, ventas y estado directamente desde el contrato. Si una lectura falla, el proyecto aparece como no disponible.",
+    tag: "ESTADO OBSERVABLE",
     tagColor: "text-emerald-700",
     iconBg: "bg-emerald-50 border-emerald-200 text-emerald-600",
     glow: "bg-emerald-100",
@@ -26,10 +26,10 @@ const steps = [
   {
     num: "03",
     icon: "payments",
-    title: "Gana Dividendos",
+    title: "Compra y Reclama",
     description:
-      "A medida que la energía solar se inyecta en la red eléctrica, los ingresos se liquidan automáticamente a la bóveda de Soroban y se pagan directamente a tu wallet en XLM o USDC.",
-    tag: "PAGOS AUTOMATIZADOS 24H",
+      "Compra participaciones con XLM nativo. El creator deposita ingresos en el contrato y cada holder puede reclamar únicamente su saldo proporcional.",
+    tag: "XLM NATIVO + RECLAMO EXPLÍCITO",
     tagColor: "text-amber-700",
     iconBg: "bg-amber-50 border-amber-200 text-amber-600",
     glow: "bg-amber-100",
@@ -39,33 +39,29 @@ const steps = [
 export default function HowItWorks() {
   return (
     <section id="how" className="w-full max-w-7xl mx-auto px-5 lg:px-10 py-16">
-      {/* Header */}
       <div className="flex flex-col items-center text-center space-y-3 max-w-3xl mx-auto mb-12">
         <span className="font-mono text-[11px] uppercase tracking-widest text-emerald-700 bg-emerald-100/70 border border-emerald-200 px-5 py-2 rounded-full font-semibold">
-          Infraestructura Simple y Descentralizada
+          Infraestructura Simple y Verificable
         </span>
         <h2 className="font-display text-[24px] leading-[32px] lg:text-[40px] lg:leading-[48px] text-slate-900 font-bold">
           ¿Cómo Funciona el Protocolo NIKO SUN?
         </h2>
         <p className="text-[14px] text-slate-600 leading-relaxed">
-          Eliminamos los intermediarios de capital de riesgo tradicionales.
-          Conecta directamente tu liquidez con la generación de energía renovable
-          en Latinoamérica a través de contratos Soroban.
+          El contrato conserva el estado financiero. La interfaz muestra sus
+          lecturas yestimaciones separadas; no convierte telemetría demo en
+          evidencia verificada.
         </p>
       </div>
 
-      {/* Steps */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {steps.map((step, i) => (
+        {steps.map((step) => (
           <div
-            key={i}
+            key={step.num}
             className="relative p-8 rounded-xl bg-white border border-slate-200 flex flex-col justify-between overflow-hidden shadow-md group hover:border-emerald-300 hover:shadow-lg transition-all duration-300"
           >
-            {/* Glow */}
             <div
               className={`absolute -right-6 -top-6 w-24 h-24 ${step.glow} rounded-full blur-2xl group-hover:opacity-80 transition-all`}
             />
-
             <div>
               <div className="flex items-center justify-between mb-5">
                 <span className="font-display text-[32px] font-bold text-slate-200 select-none">
@@ -89,9 +85,7 @@ export default function HowItWorks() {
 
             <div className="mt-6 pt-3 flex items-center gap-2 font-mono text-[11px] font-semibold">
               <span className={step.tagColor}>{step.tag}</span>
-              <span
-                className={`material-symbols-outlined ${step.tagColor} text-[14px]`}
-              >
+              <span className={`material-symbols-outlined ${step.tagColor} text-[14px]`}>
                 arrow_forward
               </span>
             </div>

@@ -73,10 +73,10 @@ export default function Header() {
               Dashboard
             </a>
             <a
-              href="#"
+              href="/proof"
               className="text-stone-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-full px-4 py-1.5 text-xs font-medium transition-all flex items-center gap-1"
             >
-              Docs{" "}
+              Public Proof{" "}
               <span className="material-symbols-outlined text-[13px] text-stone-400">
                 open_in_new
               </span>
@@ -115,8 +115,9 @@ export default function Header() {
                 </button>
                 <div className="flex flex-col items-end">
                   <span className="font-mono text-[11px] text-emerald-700 font-bold">
-                    {balance} XLM
+                    {balance === "Unavailable" ? "Unavailable" : `${balance} XLM`}
                   </span>
+
                   <span className="font-mono text-[10px] text-slate-500">
                     Saldo
                   </span>

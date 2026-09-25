@@ -40,6 +40,7 @@ export default function WalletModal({
             Conectar Billetera Stellar
           </h3>
           <button
+            type="button"
             onClick={onClose}
             className="text-slate-400 hover:text-slate-700 transition-colors"
           >
@@ -54,6 +55,7 @@ export default function WalletModal({
 
         <div className="space-y-3">
           <button
+            type="button"
             onClick={handleFreighter}
             className="w-full p-4 rounded-lg bg-slate-50 border border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 transition-colors flex items-center justify-between text-slate-900"
           >
@@ -70,26 +72,17 @@ export default function WalletModal({
             </span>
           </button>
 
-          <button
-            onClick={() => {
-              alert(
-                "Lobstr Wallet — escanea el QR con tu app Lobstr para conectar via WalletConnect"
-              );
-            }}
-            className="w-full p-4 rounded-lg bg-slate-50 border border-slate-200 hover:bg-orange-50 hover:border-orange-300 transition-colors flex items-center justify-between text-slate-900"
-          >
+          <div className="w-full p-4 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between text-slate-500">
             <div className="flex items-center gap-3">
-              <span className="material-symbols-outlined text-orange-500">
+              <span className="material-symbols-outlined text-slate-400">
                 account_balance_wallet
               </span>
-              <span className="text-[16px] font-semibold">
-                Lobstr Mobile
-              </span>
+              <span className="text-[16px] font-semibold">Lobstr Mobile</span>
             </div>
-            <span className="font-mono text-[11px] font-medium text-slate-500">
-              QR READY
+            <span className="font-mono text-[10px] font-medium text-slate-400">
+              UNAVAILABLE
             </span>
-          </button>
+          </div>
         </div>
 
         <p className="text-[11px] text-slate-400 mt-5 text-center">

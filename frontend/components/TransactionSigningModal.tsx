@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-
-/* ──────────────────── Types ──────────────────── */
+import {
+  formatIntegerAmount,
+  formatStroopsAsXlm,
+} from "@/lib/amounts";
 
 interface SigningModalProps {
   open: boolean;
   onClose: () => void;
   onConfirm: () => void;
-  /** Current signing phase: idle | preparing | signing | submitting | success | error */
   phase:
     | "idle"
     | "preparing"
@@ -19,105 +20,79 @@ interface SigningModalProps {
     | "rejected"
     | "insufficient_balance"
     | "wallet_missing";
-  /** Error message when phase is error */
   errorMessage?: string;
-  /* ── Investment data ── */
   projectName: string;
-  projectFlag: string;
-  assetId: string;
-  tokenCount: number;
-  costXlm: number;
-  costUsd: number;
-  apy: number;
-  capacityWp: number;
-  /* ── Wallet data ── */
+  tokenAmount: bigint;
+  costStroops: bigint;
   walletAddress: string;
   walletBalance: string;
   contractId: string;
 }
 
-/* ──────────────────── Helpers ──────────────────── */
-
-function shortAddr(a: string) {
-  if (!a) return "—";
-  return a.slice(0, 6) + "..." + a.slice(-4);
+function shortAddress(value: string) {
+  return value ? `${value.slice(0, 6)}...${value.slice(-4)}` : "—";
 }
 
-function shortContract(a: string) {
-  if (!a) return "—";
-  return a.slice(0, 6) + "..." + a.slice(-4);
+function shortContract(value: string) {
+  return value ? `${value.slice(0, 6)}...${value.slice(-4)}` : "—";
 }
-
-/* ──────────────────── Phase config ──────────────────── */
 
 const PHASE_CONFIG = {
   idle: {
     icon: "key",
     label: "Firmar con Freighter",
-    sublabel: "",
-    btnClass:
-      "bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg shadow-emerald-600/25",
+    btnClass: "bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/25",
     showSpinner: false,
   },
   preparing: {
     icon: "sync",
-    label: "Preparando transacción...",
-    sublabel: "Construyendo llamada Soroban",
+    label: "Preparando transacción…",
     btnClass: "bg-emerald-600 opacity-70 cursor-not-allowed text-white",
     showSpinner: true,
   },
   signing: {
     icon: "key",
-    label: "Esperando firma en Freighter...",
-    sublabel: "No cierres esta ventana",
+    label: "Esperando firma…",
     btnClass: "bg-emerald-600 opacity-70 cursor-not-allowed text-white",
     showSpinner: true,
   },
   submitting: {
     icon: "sync",
-    label: "Enviando a Stellar...",
-    sublabel: "Confirmación en < 5 segundos",
+    label: "Enviando a Stellar…",
     btnClass: "bg-emerald-600 opacity-70 cursor-not-allowed text-white",
     showSpinner: true,
   },
   success: {
     icon: "check_circle",
-    label: "¡Transacción Confirmada!",
-    sublabel: "Tokens acreditados en tu cuenta",
+    label: "Transacción confirmada",
     btnClass: "bg-emerald-700 text-white",
     showSpinner: false,
   },
   error: {
     icon: "error",
-    label: "Error en la Transacción",
-    sublabel: "",
-    btnClass: "bg-red-600 hover:bg-red-700 text-white",
+    label: "Error de transacción",
+    btnClass: "bg-red-600 text-white",
     showSpinner: false,
   },
   rejected: {
     icon: "cancel",
-    label: "Firma Rechazada",
-    sublabel: "Cancelaste la transacción en Freighter",
-    btnClass: "bg-slate-500 hover:bg-slate-600 text-white",
+    label: "Firma rechazada",
+    btnClass: "bg-slate-500 text-white",
     showSpinner: false,
   },
   insufficient_balance: {
     icon: "account_balance_wallet",
-    label: "Saldo Insuficiente",
-    sublabel: "",
-    btnClass: "bg-red-600 hover:bg-red-700 text-white",
+    label: "Saldo insuficiente",
+    btnClass: "bg-red-600 text-white",
     showSpinner: false,
   },
   wallet_missing: {
     icon: "extension",
-    label: "Freighter No Detectado",
-    sublabel: "Instala la extensión para continuar",
-    btnClass: "bg-orange-600 hover:bg-orange-700 text-white",
+    label: "Freighter no detectado",
+    btnClass: "bg-orange-600 text-white",
     showSpinner: false,
   },
 } as const;
-
-/* ──────────────────── Component ──────────────────── */
 
 export default function TransactionSigningModal({
   open,
@@ -126,20 +101,15 @@ export default function TransactionSigningModal({
   phase,
   errorMessage,
   projectName,
-  projectFlag,
-  assetId,
-  tokenCount,
-  costXlm,
-  costUsd,
-  apy,
-  capacityWp,
+  tokenAmount,
+  costStroops,
   walletAddress,
   walletBalance,
   contractId,
 }: SigningModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const cfg = PHASE_CONFIG[phase] || PHASE_CONFIG.idle;
-  const isTerminal = [
+  const config = PHASE_CONFIG[phase] ?? PHASE_CONFIG.idle;
+  const terminal = [
     "success",
     "error",
     "rejected",
@@ -147,401 +117,194 @@ export default function TransactionSigningModal({
     "wallet_missing",
   ].includes(phase);
 
-  /* ── Close on Escape ── */
   useEffect(() => {
     if (!open) return;
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && isTerminal) onClose();
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === "Escape" && terminal) onClose();
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [open, isTerminal, onClose]);
+  }, [onClose, open, terminal]);
 
   if (!open) return null;
 
-  const dailyYield = (costXlm * apy) / 100 / 365;
-  const monthlyYield = dailyYield * 30;
-
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 overflow-y-auto bg-slate-900/45 backdrop-blur-md transition-all duration-300"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && isTerminal) onClose();
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 overflow-y-auto bg-slate-900/45 backdrop-blur-md"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && terminal) onClose();
       }}
     >
       <div
         ref={dialogRef}
-        className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden border-2 border-emerald-500/20 animate-in fade-in zoom-in-95 duration-200"
+        className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden border-2 border-emerald-500/20"
       >
-        {/* ── Top accent line ── */}
         <div className="h-1.5 w-full bg-gradient-to-r from-emerald-500 via-amber-500 to-teal-500" />
-
-        {/* ── Header ── */}
         <div className="px-6 sm:px-8 pt-6 pb-5 border-b border-slate-200 flex items-start justify-between bg-slate-50/50">
-          <div className="flex items-center gap-3.5">
-            {/* Freighter shield avatar */}
-            <div className="relative flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-md shadow-amber-500/20 text-white p-2">
-              <svg className="w-7 h-7 fill-current" viewBox="0 0 24 24">
-                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-              </svg>
-              <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-xs">
-                <span className="w-1.5 h-1.5 rounded-full bg-white" />
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-display text-[16px] font-bold tracking-tight text-slate-900">
-                  Confirmar Transacción en Freighter
-                </h3>
-                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                  Extensión Activa
-                </span>
-              </div>
-              <p className="font-mono text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
-                <span className="material-symbols-outlined text-[14px] text-amber-600">
-                  code_blocks
-                </span>
-                Soroban Invocation:
-                <span className="font-bold text-emerald-700 px-1.5 py-0.2 bg-emerald-50 rounded">
-                  purchase_tokens
-                </span>
-              </p>
-            </div>
+          <div>
+            <h3 className="font-display text-[16px] font-bold tracking-tight text-slate-900">
+              Confirmar purchase_tokens
+            </h3>
+            <p className="mt-1 font-mono text-xs text-slate-500">
+              Stellar Testnet · native XLM settlement
+            </p>
           </div>
-          {isTerminal && (
+          {terminal ? (
             <button
+              type="button"
               onClick={onClose}
               className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
               title="Cerrar"
             >
               <span className="material-symbols-outlined text-[20px]">close</span>
             </button>
-          )}
+          ) : null}
         </div>
 
-        {/* ── Body ── */}
-        <div className="p-6 sm:p-8 space-y-6 max-h-[75vh] overflow-y-auto">
-          {/* 1. Investment summary */}
-          <div className="rounded-xl p-5 bg-slate-50 border border-slate-200 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">{projectFlag}</span>
-                <span className="font-display text-[15px] font-bold text-slate-900">
-                  {projectName}
-                </span>
+        <div className="p-6 sm:p-8 space-y-5 max-h-[75vh] overflow-y-auto">
+          <div className="rounded-xl p-5 bg-slate-50 border border-slate-200">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Project</div>
+                <div className="mt-1 font-display text-[16px] font-bold text-slate-900">{projectName}</div>
               </div>
-              <span className="px-2.5 py-0.5 rounded-full font-mono text-xs bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
-                {assetId}
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-mono text-[10px] font-bold text-emerald-700">
+                STROOP-SAFE
               </span>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] font-semibold text-slate-500 block uppercase tracking-wide">
-                  Fracciones Solicitadas
-                </span>
-                <span className="font-mono text-[16px] font-bold text-slate-900 block mt-0.5">
-                  {tokenCount} Tokens
-                </span>
-                <span className="text-[11px] text-emerald-600 font-medium">
-                  ~{capacityWp.toFixed(1)} Wp potencia solar
-                </span>
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Token amount</div>
+                <div className="mt-1 font-mono text-[20px] font-bold text-slate-900">
+                  {formatIntegerAmount(tokenAmount)}
+                </div>
               </div>
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] font-semibold text-slate-500 block uppercase tracking-wide">
-                  Débito Total de Fondos
-                </span>
-                <span className="font-mono text-[16px] font-bold text-orange-700 block mt-0.5">
-                  {costXlm.toLocaleString("en-US")} XLM
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  ~${costUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
-                  USD aprox.
-                </span>
-              </div>
-              <div className="p-3 bg-white rounded-lg border border-slate-200">
-                <span className="text-[11px] font-semibold text-slate-500 block uppercase tracking-wide">
-                  Rendimiento Estimado
-                </span>
-                <span className="font-mono text-[16px] font-bold text-emerald-600 block mt-0.5">
-                  {apy}% APY
-                </span>
-                <span className="text-[11px] text-emerald-600 font-medium">
-                  ~{dailyYield.toFixed(2)} XLM / día
-                </span>
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Exact debit</div>
+                <div className="mt-1 font-mono text-[16px] font-bold text-orange-700">
+                  {formatStroopsAsXlm(costStroops)}
+                </div>
+                <div className="mt-1 font-mono text-[10px] text-slate-400">{costStroops.toString()} stroops</div>
               </div>
             </div>
           </div>
 
-          {/* 2. Stellar network params table */}
           <div className="rounded-xl border border-slate-200 overflow-hidden text-xs">
             <div className="bg-slate-100 px-4 py-2.5 font-semibold uppercase tracking-wider text-slate-500 flex items-center justify-between">
-              <span>Parámetros de Red Stellar Soroban</span>
-              <span className="flex items-center gap-1 text-emerald-700 normal-case font-mono">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Stellar Testnet
-              </span>
+              <span>Stellar Soroban parameters</span>
+              <span className="font-mono text-emerald-700 normal-case">Testnet</span>
             </div>
-            <div className="divide-y divide-slate-200 bg-white font-[13px]">
-              {/* Wallet */}
-              <div className="px-4 py-2.5 flex items-center justify-between">
-                <span className="text-slate-500 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[15px]">
-                    wallet
-                  </span>
-                  Wallet Firmante (Freighter)
-                </span>
-                <div className="text-right">
-                  <span className="font-mono font-bold text-slate-900">
-                    {shortAddr(walletAddress)}
-                  </span>
-                  <span className="text-[11px] text-emerald-700 ml-1.5">
-                    (Saldo: {walletBalance} XLM)
-                  </span>
-                </div>
+            <div className="divide-y divide-slate-200 bg-white">
+              <div className="px-4 py-3 flex items-center justify-between gap-4">
+                <span className="text-slate-500">Signing wallet</span>
+                <span className="font-mono font-bold text-slate-900">{shortAddress(walletAddress)}</span>
               </div>
-              {/* Contract */}
-              <div className="px-4 py-2.5 flex items-center justify-between">
-                <span className="text-slate-500 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[15px] text-emerald-600">
-                    verified
-                  </span>
-                  Contrato Inteligente Soroban
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono text-slate-900 font-semibold">
-                    {shortContract(contractId)}
-                  </span>
-                  <span className="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 text-[10px] font-mono">
-                    Verificado
-                  </span>
-                </div>
+              <div className="px-4 py-3 flex items-center justify-between gap-4">
+                <span className="text-slate-500">Contract</span>
+                <span className="font-mono font-bold text-slate-900">{shortContract(contractId)}</span>
               </div>
-              {/* Gas */}
-              <div className="px-4 py-2.5 flex items-center justify-between">
-                <span className="text-slate-500 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[15px] text-amber-600">
-                    local_gas_station
-                  </span>
-                  Comisión de Red (Gas Fee)
-                </span>
-                <div className="text-right">
-                  <span className="font-mono font-bold text-amber-800">
-                    ~0.0001 XLM
-                  </span>
-                  <span className="text-[11px] text-slate-500 ml-1">
-                    (~$0.000013 USD)
-                  </span>
-                </div>
+              <div className="px-4 py-3 flex items-center justify-between gap-4">
+                <span className="text-slate-500">Settlement asset</span>
+                <span className="font-mono font-bold text-emerald-700">Native XLM</span>
               </div>
-              {/* Speed */}
-              <div className="px-4 py-2.5 flex items-center justify-between">
-                <span className="text-slate-500 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[15px]">
-                    speed
-                  </span>
-                  Tiempo de Confirmación
-                </span>
-                <span className="font-mono text-slate-900">
-                  &lt; 5 seg (Stellar SCP)
-                </span>
+              <div className="px-4 py-3 flex items-center justify-between gap-4">
+                <span className="text-slate-500">Network fee</span>
+                <span className="font-mono text-slate-700">Calculated by Stellar</span>
               </div>
-              {/* Legal safeguard */}
-              <div className="px-4 py-2.5 flex items-start justify-between bg-emerald-50/40">
-                <span className="text-slate-500 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[15px] text-emerald-700">
-                    shield_lock
-                  </span>
-                  Respaldo Legal RWA
-                </span>
-                <span className="text-right font-[13px] text-emerald-900 font-medium max-w-[280px]">
-                  Certificado de Usufructo y Garantía Fiduciaria emitido
-                  on-chain a tu cuenta
-                </span>
+              <div className="px-4 py-3 flex items-center justify-between gap-4">
+                <span className="text-slate-500">Finality boundary</span>
+                <span className="font-mono text-slate-700">Closed ledger</span>
               </div>
             </div>
           </div>
 
-          {/* 3. Security box */}
           <div className="rounded-xl p-4 bg-emerald-50 border border-emerald-200 flex items-start gap-3">
-            <span className="material-symbols-outlined text-emerald-700 text-[22px] mt-0.5">
-              lock
-            </span>
-            <div className="space-y-0.5">
-              <h4 className="font-display text-[13px] text-emerald-950 font-bold uppercase tracking-wide">
-                Transacción Protegida Fiduciariamente
-              </h4>
+            <span className="material-symbols-outlined text-emerald-700 text-[22px] mt-0.5">lock</span>
+            <div>
+              <h4 className="font-display text-[13px] text-emerald-950 font-bold uppercase tracking-wide">Local wallet signature</h4>
               <p className="text-[13px] text-emerald-800 leading-relaxed">
-                Tus fondos no pasan por intermediarios bancarios especulativos:
-                se transfieren de forma atómica al fideicomiso custodiado por La
-                Fiduciaria/BCP y se registran en el oráculo IoT en tiempo real.
+                Freighter signs this purchase invocation locally. NIKO SUN does not receive or store your private key.
               </p>
             </div>
           </div>
 
-          {/* 4. Error / rejection / balance warnings */}
-          {phase === "error" && errorMessage && (
-            <div className="rounded-xl p-4 bg-red-50 border border-red-200 flex items-start gap-3">
-              <span className="material-symbols-outlined text-red-600 text-[22px] mt-0.5">
-                error
-              </span>
-              <div>
-                <h4 className="font-display text-[13px] text-red-900 font-bold uppercase tracking-wide">
-                  Error Detectado
-                </h4>
-                <p className="text-[13px] text-red-700 leading-relaxed mt-0.5 font-mono">
-                  {errorMessage}
-                </p>
-              </div>
+          {phase === "error" && errorMessage ? (
+            <div className="rounded-xl p-4 bg-red-50 border border-red-200 text-[13px] text-red-700 break-words">
+              {errorMessage}
             </div>
-          )}
-
-          {phase === "rejected" && (
-            <div className="rounded-xl p-4 bg-amber-50 border border-amber-200 flex items-start gap-3">
-              <span className="material-symbols-outlined text-amber-600 text-[22px] mt-0.5">
-                cancel
-              </span>
-              <div>
-                <h4 className="font-display text-[13px] text-amber-900 font-bold uppercase tracking-wide">
-                  Firma Cancelada
-                </h4>
-                <p className="text-[13px] text-amber-800 leading-relaxed">
-                  Cerraste la ventana de Freighter sin firmar. Tu inversión no
-                  fue procesada. Puedes intentar nuevamente cuando estés listo.
-                </p>
-              </div>
+          ) : null}
+          {phase === "rejected" ? (
+            <div className="rounded-xl p-4 bg-amber-50 border border-amber-200 text-[13px] text-amber-800">
+              The wallet signature was rejected. No purchase was submitted.
             </div>
-          )}
-
-          {phase === "insufficient_balance" && (
-            <div className="rounded-xl p-4 bg-red-50 border border-red-200 flex items-start gap-3">
-              <span className="material-symbols-outlined text-red-600 text-[22px] mt-0.5">
-                account_balance_wallet
-              </span>
-              <div>
-                <h4 className="font-display text-[13px] text-red-900 font-bold uppercase tracking-wide">
-                  Saldo Insuficiente
-                </h4>
-                <p className="text-[13px] text-red-700 leading-relaxed">
-                  Tu wallet {shortAddr(walletAddress)} tiene {walletBalance} XLM
-                  pero necesitas {costXlm.toLocaleString("en-US")} XLM más el
-                  gas fee (~0.0001 XLM). Recarga tu wallet e intenta de nuevo.
-                </p>
-              </div>
+          ) : null}
+          {phase === "insufficient_balance" ? (
+            <div className="rounded-xl p-4 bg-red-50 border border-red-200 text-[13px] text-red-700">
+              The connected wallet does not have enough native XLM for the exact debit and network fee.
             </div>
-          )}
+          ) : null}
+          {phase === "wallet_missing" ? (
+            <div className="rounded-xl p-4 bg-orange-50 border border-orange-200 text-[13px] text-orange-800">
+              Install or unlock Freighter, then try again.
+            </div>
+          ) : null}
 
-          {phase === "wallet_missing" && (
-            <div className="rounded-xl p-4 bg-orange-50 border border-orange-200 flex items-start gap-3">
-              <span className="material-symbols-outlined text-orange-600 text-[22px] mt-0.5">
-                extension
-              </span>
-              <div>
-                <h4 className="font-display text-[13px] text-orange-900 font-bold uppercase tracking-wide">
-                  Freighter No Detectado
-                </h4>
-                <p className="text-[13px] text-orange-800 leading-relaxed">
-                  Instala la extensión Freighter desde{" "}
+          <div className="space-y-3 pt-2">
+            {terminal ? (
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className={`w-full sm:flex-1 py-4 px-6 rounded-xl font-display text-[14px] font-bold transition-all flex items-center justify-center gap-2 ${config.btnClass}`}
+                >
+                  <span className="material-symbols-outlined text-[20px]">{config.icon}</span>
+                  {phase === "wallet_missing" ? "Cerrar" : "Entendido"}
+                </button>
+                {phase === "wallet_missing" ? (
                   <a
                     href="https://freighter.app"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="font-bold underline"
+                    className="w-full sm:w-auto py-4 px-6 rounded-xl bg-slate-100 text-slate-700 font-medium border border-slate-200 text-center"
                   >
-                    freighter.app
-                  </a>{" "}
-                  y recarga la página para continuar.
-                </p>
+                    Open Freighter
+                  </a>
+                ) : null}
               </div>
-            </div>
-          )}
-
-          {/* 5. Action buttons */}
-          <div className="space-y-3 pt-2">
-            <div className="flex flex-col sm:flex-row items-center gap-3">
-              {isTerminal ? (
-                <>
-                  <button
-                    onClick={onClose}
-                    className={`w-full sm:flex-1 py-4 px-6 rounded-xl font-display text-[14px] font-bold transition-all flex items-center justify-center gap-2 ${cfg.btnClass}`}
-                  >
-                    <span className="material-symbols-outlined text-[20px]">
-                      {cfg.icon}
-                    </span>
-                    {phase === "success"
-                      ? "Cerrar"
-                      : phase === "wallet_missing"
-                        ? "Instalar Freighter"
-                        : "Entendido"}
-                  </button>
-                  {phase === "wallet_missing" && (
-                    <a
-                      href="https://freighter.app"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full sm:w-auto py-4 px-6 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-display text-[14px] font-medium border border-slate-200 transition-colors text-center"
-                    >
-                      Abrir freighter.app
-                    </a>
+            ) : (
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onConfirm}
+                  disabled={phase !== "idle"}
+                  className={`w-full sm:flex-1 py-4 px-6 rounded-xl font-display text-[14px] font-bold shadow-lg transition-all flex items-center justify-center gap-2 disabled:cursor-not-allowed ${config.btnClass}`}
+                >
+                  {config.showSpinner ? (
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <span className="material-symbols-outlined text-[20px]">{config.icon}</span>
                   )}
-                </>
-              ) : (
-                <>
-                  <button
-                    onClick={onConfirm}
-                    disabled={phase !== "idle"}
-                    className={`w-full sm:flex-1 py-4 px-6 rounded-xl font-display text-[14px] font-bold shadow-lg active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed ${cfg.btnClass}`}
-                  >
-                    {cfg.showSpinner && (
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    )}
-                    {!cfg.showSpinner && (
-                      <span className="material-symbols-outlined text-[20px]">
-                        {cfg.icon}
-                      </span>
-                    )}
-                    <span>
-                      {phase === "idle"
-                        ? `Firmar con Freighter (${costXlm.toLocaleString("en-US")} XLM)`
-                        : cfg.label}
-                    </span>
-                  </button>
-                  <button
-                    onClick={onClose}
-                    disabled={phase !== "idle"}
-                    className="w-full sm:w-auto py-4 px-6 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-800 font-display text-[14px] font-medium border border-slate-200 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    Rechazar
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* Micro-copy */}
-            <p className="text-center text-[11px] text-slate-400 flex items-center justify-center gap-1.5 pt-1">
-              <span className="material-symbols-outlined text-[14px] text-emerald-600">
-                verified_user
-              </span>
-              Al firmar, se abrirá la ventana emergente de Freighter para
-              autorizar con tu clave privada local. NIKO SUN nunca tiene
-              custodia de tus llaves.
-            </p>
+                  <span>{phase === "idle" ? `Sign ${formatStroopsAsXlm(costStroops)}` : config.label}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={phase !== "idle"}
+                  className="w-full sm:w-auto py-4 px-6 rounded-xl bg-slate-100 text-slate-600 border border-slate-200 font-medium transition-colors disabled:opacity-40"
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* ── Pending banner ── */}
-        {(phase === "preparing" || phase === "signing" || phase === "submitting") && (
-          <div className="p-4 bg-emerald-900 text-white flex items-center justify-center gap-3 animate-in slide-in-from-bottom duration-200">
+        {phase === "preparing" || phase === "signing" || phase === "submitting" ? (
+          <div className="p-4 bg-emerald-900 text-white flex items-center justify-center gap-3">
             <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            <span className="font-mono text-xs font-semibold">
-              {phase === "preparing"
-                ? "Construyendo transacción Soroban..."
-                : phase === "signing"
-                  ? "Esperando firma local en Freighter Extension... No cierres esta ventana."
-                  : "Transacción en proceso de confirmación en Stellar..."}
-            </span>
+            <span className="font-mono text-xs font-semibold">{config.label}</span>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

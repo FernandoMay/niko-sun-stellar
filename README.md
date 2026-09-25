@@ -1,35 +1,36 @@
-# NIKO SUN — Solar Energy RWA on Stellar
+# NIKO SUN — Solar Project Settlement on Stellar Testnet
 
-> Tokeniza energía solar real. Invierte en proyectos de energía renovable. Recibe rendimientos on-chain.
+> Buy project tokens with native XLM and claim creator-deposited revenue through a Soroban contract.
 
 **Built for Stellar Odyssey Perú 2026** — Track 03: Real-World Assets & Compliant Rails
 
 ## 🌞 What is NIKO SUN?
 
-NIKO SUN is a **Real-World Asset (RWA)** platform that tokenizes solar energy projects on the **Stellar** network. Investors can:
+NIKO SUN is a Stellar Soroban prototype for project-token purchases and proportional revenue claims. The current public proof is limited to the observed Testnet deployment and transaction state.
 
-- **Explore** solar projects with real IoT telemetry data
-- **Invest** by purchasing project tokens (SEP-41 compatible)
-- **Earn** proportional revenue from energy generation
-- **Track** performance through live dashboards
+- **Explore** projects from on-chain project views
+- **Purchase** project tokens with native XLM
+- **Claim** revenue explicitly deposited by a project creator
+- **Reconcile** purchase events against contract-minted supply
+
+The interface does not claim verified physical generation, legal title, audited IoT telemetry, fiat valuation, or guaranteed yield. See [`evidence/`](evidence/README.md) and `/proof` for the public record.
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
 │  Frontend (Next.js + Stellar SDK)           │
-│  Freighter Wallet Integration               │
+│  Freighter signatures and contract views    │
 ├─────────────────────────────────────────────┤
 │  Smart Contract (Soroban / Rust)            │
-│  • Project management                       │
-│  • Token purchases                          │
-│  • Revenue distribution (Staking pattern)   │
-│  • IoT telemetry anchoring                  │
+│  • Project state and creator ownership      │
+│  • Native-XLM token purchases               │
+│  • Explicit creator revenue deposits        │
+│  • Proportional holder claims               │
 ├─────────────────────────────────────────────┤
-│  Stellar Network                            │
-│  • Low fees (~0.00001 XLM)                  │
-│  • Fast settlement (5 sec)                  │
-│  • SEP-41 token standard                    │
+│  Stellar Testnet                            │
+│  • Public contract and transaction records  │
+│  • Holder-event indexer reconciliation      │
 └─────────────────────────────────────────────┘
 ```
 
@@ -46,7 +47,9 @@ niko-sun-stellar/
 │   ├── app/
 │   │   ├── layout.tsx
 │   │   ├── page.tsx            # Landing page
-│   │   └── project/[id]/page.tsx  # Project detail
+│   │   ├── dashboard/page.tsx  # On-chain portfolio and admin views
+│   │   ├── proof/page.tsx      # Public evidence page
+│   │   └── project/[id]/page.tsx  # On-chain project detail
 │   ├── components/
 │   │   ├── Header.tsx
 │   │   ├── Hero.tsx
@@ -58,6 +61,7 @@ niko-sun-stellar/
 │   │   └── WalletButton.tsx    # Freighter integration
 │   ├── globals.css
 │   └── package.json
+├── evidence/                     # Public Testnet proof pack
 ├── scripts/
 │   └── deploy.sh               # Testnet deployment
 ├── .github/workflows/ci.yml    # CI/CD
@@ -138,12 +142,13 @@ NIKO SUN uses a **proportional revenue distribution** pattern (inspired by Synth
 3. Each holder's claimable = `balance × (rewardPerToken - rewardPaid)`
 4. Claims are independent of deposit timing
 
-## 🔒 Security
+## 🔒 Evidence and security boundary
 
-- Soroban's execution model prevents reentrancy by default
 - Address-based authentication via `require_auth()`
-- Input validation on all functions
-- Project creator-only admin functions
+- Project creator-only revenue and administrative functions
+- Holder balances reconcile against contract-minted supply
+- The public Testnet evidence is not an external audit or legal opinion
+- Physical-asset metadata and off-chain telemetry are not represented as verified unless added to the evidence pack
 
 ## 📄 License
 
