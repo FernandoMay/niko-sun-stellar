@@ -1,6 +1,15 @@
 # Public transaction evidence
 
+> Historical snapshot at ledger `4856253`; live Testnet state may be newer. The values below are not a live-state guarantee.
+
 All amounts below use exact base units. Stellar native XLM uses seven decimal places, so `10000000` stroops equals `1.0000000 XLM`.
+
+Snapshot identity:
+
+- Contract: `CAW37S6RDQCRCHUBMFG4KMMZHSNI6AD5AR5MG5OQS76J7FU7JUDR3UAK`
+- Source commit: `1400127`
+- Observed: `2026-09-24` (date precision)
+- Snapshot ledger: `4856253`
 
 ## Project creation
 

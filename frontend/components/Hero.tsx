@@ -103,7 +103,7 @@ export default function Hero() {
                   </span>
                 </div>
                 <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 font-semibold">
-                  OBSERVED • TESTNET
+                  HISTORICAL SNAPSHOT
                 </span>
               </div>
 
@@ -145,7 +145,8 @@ export default function Hero() {
               </div>
 
               <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 font-mono text-[10px] text-slate-500">
-                <span>Observed {evidence.observedAt}</span>
+                 <span>Snapshot ledger {evidence.snapshotLedger} · observed {evidence.observedAt}</span>
+                 <span className="ml-2 text-amber-700">Live Testnet may be newer</span>
                 <a href="/proof" className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:underline">
                   View public proof
                   <span className="material-symbols-outlined text-[13px]">open_in_new</span>
