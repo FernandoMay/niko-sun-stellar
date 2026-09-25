@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CONTRACT_ID, EXPLORER_URL, LEDGER_EXPLORER_URL } from "@/lib/contract";
+import {
+  CONTRACT_DEPLOYMENT_LEDGER,
+  CONTRACT_ID,
+  EXPLORER_URL,
+  LEDGER_EXPLORER_URL,
+} from "@/lib/contract";
 import {
   formatHolderCount,
   formatLastIndexed,
   formatRelativeTime,
+  formatTokenAmount,
+  formatWarning,
   type HolderMetrics,
 } from "@/lib/holderIndexer";
 
@@ -36,14 +43,81 @@ export default function ProtocolVerification({
     metrics?.holderCount !== null && metrics?.holderCount !== undefined
       ? formatHolderCount(metrics.holderCount)
       : "—";
+  const isStale =
+    metrics?.status === "stale" ||
+    (metrics?.isStale === true && metrics?.status !== "error");
+  const isReconciled =
+    metrics !== null &&
+    metrics.reconciled === true &&
+    metrics.status === "indexed" &&
+    metrics.holderCount !== null &&
+    metrics.contractMinted === metrics.indexedBalanceTotal &&
+    !isStale;
+  const isReconciliationPending =
+    metrics?.status === "reconciling" && !isReconciled;
+  const isUnavailable = metrics?.status === "error";
   const isIndexing =
-    metrics === null || metrics.holderCount === null || metrics.status === "indexing";
+    metrics === null ||
+    (!isStale &&
+      !isReconciliationPending &&
+      !isReconciled &&
+      !isUnavailable);
+  const stateDisplay = isReconciled
+    ? "Reconciled"
+    : isReconciliationPending
+      ? "Reconciliation pending"
+      : isStale
+        ? "Stale"
+        : isUnavailable
+          ? "Unavailable"
+          : "Indexing...";
+  const stateTone = isReconciled ? "text-slate-900" : "text-amber-700";
+  const hasObservedBalances =
+    metrics !== null &&
+    metrics.status !== "indexing" &&
+    metrics.status !== "error";
+  const contractMintedDisplay =
+    metrics && hasObservedBalances ? formatTokenAmount(metrics.contractMinted) : "—";
+  const indexedBalanceDisplay =
+    metrics && hasObservedBalances
+      ? formatTokenAmount(metrics.indexedBalanceTotal)
+      : "—";
   const lastIndexed = metrics?.lastIndexedAt
     ? formatLastIndexed(metrics.lastIndexedAt)
     : "—";
   const relative = metrics?.lastIndexedAt
     ? formatRelativeTime(metrics.lastIndexedAt)
     : "";
+  const warning = formatWarning(metrics?.warning);
+
+  const hasDeploymentReceipt =
+    CONTRACT_DEPLOYMENT_LEDGER !== null &&
+    Number.isSafeInteger(CONTRACT_DEPLOYMENT_LEDGER) &&
+    CONTRACT_DEPLOYMENT_LEDGER > 0;
+  const hasStateEvidence =
+    !isStale &&
+    (metrics?.status === "indexed" || metrics?.status === "reconciling");
+  const hasClaimableEvidence =
+    hasDeploymentReceipt &&
+    hasStateEvidence &&
+    metrics !== null &&
+    metrics.activeHolders !== null;
+  const hasProjectEvidence =
+    hasDeploymentReceipt &&
+    hasStateEvidence &&
+    nextProjectId != null &&
+    Number.isSafeInteger(nextProjectId) &&
+    nextProjectId >= 0;
+  const contractStatus = hasDeploymentReceipt
+    ? hasStateEvidence
+      ? "Verified"
+      : "Read incomplete"
+    : "Awaiting deployment receipt";
+  const unverifiedReadStatus = hasDeploymentReceipt
+    ? "Read incomplete"
+    : "Awaiting deployment receipt";
+  const claimableStatus = hasClaimableEvidence ? "On-chain" : unverifiedReadStatus;
+  const projectStatus = hasProjectEvidence ? "On-chain" : unverifiedReadStatus;
 
   // Keep hook alive for rerenders; suppress lint for unused var.
   void nowTick;
@@ -68,9 +142,10 @@ export default function ProtocolVerification({
           <div className="divide-y divide-slate-100">
             <Row
               icon="contract"
-              color="text-emerald-600"
+              color={contractStatus === "Verified" ? "text-emerald-600" : "text-amber-600"}
               label="Soroban contract"
-              value="Verified"
+              value={contractStatus}
+              statusIcon={contractStatus === "Verified" ? "check" : "pending"}
               href={EXPLORER_URL}
               hrefLabel="View Contract →"
               title={CONTRACT_ID}
@@ -78,29 +153,44 @@ export default function ProtocolVerification({
             />
             <Row
               icon="database"
-              color="text-emerald-600"
+              color={isReconciled ? "text-emerald-600" : "text-amber-600"}
               label="Contract state"
-              value="Indexed"
-              sub={nextProjectId != null ? `(next_project_id: ${nextProjectId})` : undefined}
+              value={<span className={stateTone}>{stateDisplay}</span>}
+              statusIcon={isReconciled ? "check" : "pending"}
+              sub={
+                hasProjectEvidence
+                  ? `(next_project_id: ${nextProjectId})`
+                  : `(${unverifiedReadStatus.toLowerCase()})`
+              }
             />
             <Row
               icon="token"
-              color="text-emerald-600"
+              color={isReconciled ? "text-emerald-600" : "text-amber-600"}
               label="Token balances"
-              value="Indexed"
-              sub={totalMinted != null ? `(total minted: ${totalMinted})` : undefined}
+              value={<span className={stateTone}>{stateDisplay}</span>}
+              statusIcon={isReconciled ? "check" : "pending"}
+              sub={
+                isReconciliationPending
+                  ? `(contract minted: ${contractMintedDisplay} · indexed: ${indexedBalanceDisplay})`
+                  : metrics
+                    ? `(contract minted: ${contractMintedDisplay})`
+                    : totalMinted != null
+                      ? `(total minted: ${totalMinted})`
+                      : undefined
+              }
             />
             <Row
               icon="group"
-              color="text-amber-600"
+              color={isReconciled ? "text-emerald-600" : "text-amber-600"}
               label="Holder count"
+              statusIcon={isReconciled ? "check" : "pending"}
               value={
-                isIndexing ? (
+                isIndexing || isReconciliationPending || isUnavailable ? (
                   <span className="inline-flex items-center gap-2">
                     <span className="font-mono font-bold text-slate-900">—</span>
                     <span className="px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-[11px] font-mono animate-pulse inline-flex items-center gap-1">
                       <span className="size-2 rounded-full bg-amber-500 animate-pulse" />
-                      Indexing...
+                      {stateDisplay}
                     </span>
                   </span>
                 ) : (
@@ -108,22 +198,30 @@ export default function ProtocolVerification({
                 )
               }
               sub={
-                metrics?.isStale
-                  ? "Stale · showing cached"
-                  : metrics?.source ?? "Stellar Testnet"
+                isStale
+                  ? "Stale · cached metrics; not current verification"
+                  : isReconciliationPending
+                    ? "Not verified until balances match"
+                    : isUnavailable
+                      ? "Holder metrics unavailable"
+                      : isReconciled
+                        ? "Reconciled · Stellar Testnet"
+                        : metrics?.source ?? "Stellar Testnet"
               }
             />
             <Row
               icon="payments"
-              color="text-emerald-600"
+              color={hasClaimableEvidence ? "text-emerald-600" : "text-amber-600"}
               label="Claimable balances"
-              value="On-chain"
+              value={claimableStatus}
+              statusIcon={hasClaimableEvidence ? "check" : "pending"}
             />
             <Row
               icon="solar_power"
-              color="text-emerald-600"
+              color={hasProjectEvidence ? "text-emerald-600" : "text-amber-600"}
               label="Project state"
-              value="On-chain"
+              value={projectStatus}
+              statusIcon={hasProjectEvidence ? "check" : "pending"}
             />
           </div>
 
@@ -144,12 +242,29 @@ export default function ProtocolVerification({
                 Last indexed
               </div>
               <div className="font-mono text-[13px] font-semibold text-slate-900">
+                <span className={isStale ? "text-amber-700" : "text-slate-900"}>
+                  {stateDisplay}
+                </span>{" "}
                 {lastIndexed}
                 {relative ? (
                   <span className="ml-2 font-normal text-slate-500">· {relative}</span>
                 ) : null}
+                {metrics && metrics.latestLedger > 0 ? (
+                  <span className="ml-2 font-normal text-slate-500">
+                    · ledger {metrics.latestLedger}
+                  </span>
+                ) : null}
               </div>
               <div className="mt-2 flex items-center gap-2">
+                <a
+                  href={EXPLORER_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 hover:underline inline-flex items-center gap-1"
+                >
+                  View Contract
+                  <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                </a>
                 <a
                   href={LEDGER_EXPLORER_URL}
                   target="_blank"
@@ -159,7 +274,7 @@ export default function ProtocolVerification({
                   View Ledger
                   <span className="material-symbols-outlined text-[14px]">open_in_new</span>
                 </a>
-                {metrics?.isStale && (
+                {isStale && (
                   <span className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-mono font-bold">
                     Stale
                   </span>
@@ -168,11 +283,19 @@ export default function ProtocolVerification({
             </div>
 
             <p className="font-mono text-[11px] leading-relaxed text-slate-500">
-              Holder count is indexed from Soroban RPC events for{" "}
-              <span className="font-semibold text-slate-700">{shortContract(CONTRACT_ID)}</span>. If the
-              contract does not emit purchase events yet, the indexer falls back to known
-              holder probes and shows an honest indexing state — never a fabricated number.
+              Holder balances are reconstructed only from successful purchase events for{" "}
+              <span className="font-semibold text-slate-700">{shortContract(CONTRACT_ID)}</span> and
+              checked against every project&apos;s minted supply. The count is shown as verified
+              only after the indexed and contract totals reconcile exactly.
             </p>
+            {warning ? (
+              <p
+                role="status"
+                className="font-mono text-[11px] leading-relaxed text-amber-700"
+              >
+                {warning}
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
@@ -189,6 +312,7 @@ function Row({
   href,
   hrefLabel,
   title,
+  statusIcon = "check",
 }: {
   icon: string;
   color: string;
@@ -198,6 +322,7 @@ function Row({
   href?: string;
   hrefLabel?: string;
   title?: string;
+  statusIcon?: string;
 }) {
   return (
     <div className="flex items-center justify-between px-5 py-3 gap-3">
@@ -207,7 +332,7 @@ function Row({
       </div>
       <div className="flex items-center gap-2 shrink-0">
         <span className="font-mono text-[12px] font-semibold text-slate-900 inline-flex items-center gap-1">
-          <span className="material-symbols-outlined text-emerald-600 text-[14px]">check</span>
+          <span className={`material-symbols-outlined ${color} text-[14px]`}>{statusIcon}</span>
           {value}
         </span>
         {sub && <span className="font-mono text-[11px] text-slate-500 hidden sm:inline">{sub}</span>}

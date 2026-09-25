@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getHolderCount,
   type HolderMetrics,
 } from "@/lib/holderIndexer";
 
-type UseHolderMetricsReturn = {
+export type UseHolderMetricsReturn = {
   metrics: HolderMetrics | null;
   loading: boolean;
   error: string | null;
@@ -17,54 +17,58 @@ export function useHolderMetrics(pollMs = 30000): UseHolderMetricsReturn {
   const [metrics, setMetrics] = useState<HolderMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(false);
+  const requestSequenceRef = useRef(0);
+  const hasCompletedRequestRef = useRef(false);
 
-  const refresh = useCallback(async () => {
+  const runRefresh = useCallback(async () => {
+    const requestId = ++requestSequenceRef.current;
+    if (!mountedRef.current) return;
+
+    if (!hasCompletedRequestRef.current) setLoading(true);
+    setError(null);
+
     try {
-      setError(null);
-      const m = await getHolderCount();
-      setMetrics(m);
-      // If holderCount is null we keep loading=false but caller shows indexing
-      // For initial indexing state we also set loading false to allow UI to render "—"
+      const nextMetrics = await getHolderCount();
+      if (
+        !mountedRef.current ||
+        requestId !== requestSequenceRef.current
+      ) {
+        return;
+      }
+      setMetrics(nextMetrics);
       setLoading(false);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
+      hasCompletedRequestRef.current = true;
+    } catch (cause) {
+      if (
+        !mountedRef.current ||
+        requestId !== requestSequenceRef.current
+      ) {
+        return;
+      }
+      setError(cause instanceof Error ? cause.message : String(cause));
       setLoading(false);
+      hasCompletedRequestRef.current = true;
     }
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        const m = await getHolderCount();
-        if (!cancelled) {
-          setMetrics(m);
-          setLoading(false);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
-          setLoading(false);
-        }
-      }
-    })();
+    mountedRef.current = true;
+    hasCompletedRequestRef.current = false;
+    void runRefresh();
 
     const id = setInterval(() => {
-      if (!cancelled) refresh();
+      void runRefresh();
     }, pollMs);
 
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
+      requestSequenceRef.current += 1;
       clearInterval(id);
     };
-  }, [refresh, pollMs]);
+  }, [runRefresh, pollMs]);
 
-  // Derive loading for indexing state: if holderCount is null and status is indexing,
-  // consumer should show Indexing... but we keep loading false after first fetch
-  // so we expose metrics.status. For backwards compat the hook returns loading only for first fetch.
-  return { metrics, loading, error, refresh };
+  return { metrics, loading, error, refresh: runRefresh };
 }
 
 export default useHolderMetrics;
