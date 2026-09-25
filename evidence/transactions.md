@@ -39,3 +39,15 @@ The total contract inflow includes the sales balance and explicit creator deposi
 | C | **Claimable** | `0.0000000 XLM` | `0.0250000 XLM` | No claim transaction | — |
 
 C must not be labeled as claimed.
+
+## Post-snapshot project registrations
+
+The following projects were created successfully **after** the immutable snapshot above. They are live Testnet state and are intentionally not included in the historical `/proof` totals.
+
+| ID | Name | Supply | Price | Minimum | Transaction | Ledger |
+|---:|---|---:|---:|---:|---|---:|
+| `2` | Solar Lima Norte | `15` | `1.0000000 XLM` | `1` | [`e89eaf8d…20a99`](https://stellar.expert/explorer/testnet/tx/e89eaf8d82a523a5f0f2a8d86c1e9949beb095b8931f54fed02552a617520a99) | `4859192` |
+| `3` | Solar Arequipa | `20` | `1.0000000 XLM` | `1` | [`fa4e1bac…f01`](https://stellar.expert/explorer/testnet/tx/fa4e1bac5afe1176b99a3793e1b21878459d35b759341374aeef466dec2b8f01) | `4859195` |
+| `4` | Solar San Martín | `10` | `1.0000000 XLM` | `1` | [`c73708cb…c6d`](https://stellar.expert/explorer/testnet/tx/c73708cbd73fbd6c80f3408a5e7bdb0a53d2d6b8e062022a58380d779a643c6d) | `4859198` |
+
+At registration, all three had `minted = 0`, `sales balance = 0`, `total revenue = 0`, and `energy = 0`. No physical-generation, capacity, APY, dividend, or progress values were invented.

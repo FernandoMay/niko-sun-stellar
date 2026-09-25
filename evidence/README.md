@@ -17,6 +17,7 @@ This directory is the review path for the public Stellar Testnet snapshot expose
 - Native XLM is converted from stroops with seven decimal places and bigint-safe arithmetic.
 - Estimates and demo telemetry do not feed verified totals.
 - C remains claimable; no claim transaction is recorded for C.
+- Three post-snapshot projects (IDs `2`-`4`) are registered on-chain and intentionally excluded from the historical totals; see [transactions.md](transactions.md).
 - Total contract inflows combine sales and deposits; they are not the claimable balance.
 - The GitHub Actions workflow is billing-blocked, so this pack does not claim CI success.
 - This evidence is not an audit, legal opinion, physical-asset title, or yield guarantee.

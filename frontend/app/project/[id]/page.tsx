@@ -2,8 +2,10 @@ import ProjectDetailClient from "./client";
 
 export const dynamicParams = false;
 
+const STATIC_PROJECT_IDS = ["1", "2", "3", "4"] as const;
+
 export function generateStaticParams() {
-  return [{ id: "1" }];
+  return STATIC_PROJECT_IDS.map((id) => ({ id }));
 }
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
