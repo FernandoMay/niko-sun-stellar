@@ -1,0 +1,976 @@
+name: Testnet Holder Indexer E2E
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testnet-holder-indexer-e2e
+  cancel-in-progress: false
+
+jobs:
+  testnet-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      network: ${{ steps.result.outputs.network }}
+      contract_id: ${{ steps.result.outputs.contract_id }}
+      wasm_hash: ${{ steps.result.outputs.wasm_hash }}
+      deployment_tx: ${{ steps.result.outputs.deployment_tx }}
+      deployment_ledger: ${{ steps.result.outputs.deployment_ledger }}
+      create_project_tx: ${{ steps.result.outputs.create_project_tx }}
+      create_project_ledger: ${{ steps.result.outputs.create_project_ledger }}
+      purchase_a1_tx: ${{ steps.result.outputs.purchase_a1_tx }}
+      purchase_a1_ledger: ${{ steps.result.outputs.purchase_a1_ledger }}
+      purchase_a2_tx: ${{ steps.result.outputs.purchase_a2_tx }}
+      purchase_a2_ledger: ${{ steps.result.outputs.purchase_a2_ledger }}
+      purchase_b_tx: ${{ steps.result.outputs.purchase_b_tx }}
+      purchase_b_ledger: ${{ steps.result.outputs.purchase_b_ledger }}
+      buyer_a_public: ${{ steps.result.outputs.buyer_a_public }}
+      buyer_b_public: ${{ steps.result.outputs.buyer_b_public }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mask and validate deployer secret
+        env:
+          DEPLOYER_SECRET: ${{ secrets.DEPLOYER_SECRET }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DEPLOYER_SECRET:-}" ]]; then
+            echo "::error::DEPLOYER_SECRET is required" >&2
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$DEPLOYER_SECRET"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache Cargo and Stellar CLI build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/niko-sun-stellar-cargo-target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-stellar-cli-27.0.0
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Install pinned Stellar CLI
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/niko-sun-stellar-cargo-target"
+          # Stellar CLI 27.0.0 has no `opt` feature. WASM optimization is built
+          # in and enabled by default in this release.
+          cargo install --locked stellar-cli --version 27.0.0
+          stellar version
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          set -euo pipefail
+          cd frontend
+          npm ci
+
+      - name: Stage 1 - Build optimized contract and resolve configuration
+        id: build
+        env:
+          DEPLOYER_SECRET: ${{ secrets.DEPLOYER_SECRET }}
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/niko-sun-stellar-cargo-target"
+          WASM_DIR="$RUNNER_TEMP/niko-sun-stellar-wasm"
+          WASM_PATH="$WASM_DIR/niko_project.wasm"
+
+          stellar contract build \
+            --locked \
+            --optimize=true \
+            --manifest-path contracts/niko_project/Cargo.toml \
+            --out-dir "$WASM_DIR"
+
+          if [[ ! -f "$WASM_PATH" ]]; then
+            echo "::error::Optimized contract WASM was not produced" >&2
+            exit 1
+          fi
+
+          WASM_HASH="$(sha256sum "$WASM_PATH" | awk '{print $1}')"
+          if [[ ! "$WASM_HASH" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Unable to compute a valid WASM SHA-256" >&2
+            exit 1
+          fi
+
+          DEPLOYER_PUBLIC="$(
+            (
+              cd frontend
+              DEPLOYER_SECRET="$DEPLOYER_SECRET" node --input-type=module -e '
+                import { Keypair } from "@stellar/stellar-sdk";
+                const secret = process.env.DEPLOYER_SECRET;
+                if (!secret) process.exit(1);
+                process.stdout.write(Keypair.fromSecretSeed(secret).publicKey());
+              '
+            )
+          )"
+          if [[ ! "$DEPLOYER_PUBLIC" =~ ^G[A-Z2-7]{55}$ ]]; then
+            echo "::error::Unable to resolve the deployer public key" >&2
+            exit 1
+          fi
+
+          if ! NATIVE_TOKEN="$(stellar contract id asset --asset native --network testnet 2>/dev/null)"; then
+            echo "::error::Unable to resolve the native XLM asset contract" >&2
+            exit 1
+          fi
+          if [[ ! "$NATIVE_TOKEN" =~ ^C[A-Z2-7]{55}$ ]]; then
+            echo "::error::Native XLM asset contract ID is invalid" >&2
+            exit 1
+          fi
+
+          {
+            printf 'wasm_path=%s\n' "$WASM_PATH"
+            printf 'wasm_hash=%s\n' "$WASM_HASH"
+            printf 'deployer_public=%s\n' "$DEPLOYER_PUBLIC"
+            printf 'native_token=%s\n' "$NATIVE_TOKEN"
+          } >> "$GITHUB_OUTPUT"
+
+          printf '::notice::stage=build_optimized_contract\n'
+
+      - name: Stage 2 - Deploy fresh constructor contract and create project #1 once
+        id: writes
+        env:
+          DEPLOYER_SECRET: ${{ secrets.DEPLOYER_SECRET }}
+          DEPLOYER_PUBLIC: ${{ steps.build.outputs.deployer_public }}
+          NATIVE_TOKEN: ${{ steps.build.outputs.native_token }}
+          WASM_HASH: ${{ steps.build.outputs.wasm_hash }}
+          WASM_PATH: ${{ steps.build.outputs.wasm_path }}
+        run: |
+          set -euo pipefail
+          HORIZON_URL="https://horizon-testnet.stellar.org"
+
+          latest_ledger() {
+            local response
+            response="$(curl \
+              --fail \
+              --silent \
+              --show-error \
+              --max-time 15 \
+              --get \
+              --data-urlencode 'order=desc' \
+              --data-urlencode 'limit=1' \
+              "$HORIZON_URL/ledgers")"
+            if ! jq -e '
+              type == "object" and
+              (._embedded.records | type == "array") and
+              (._embedded.records | length == 1) and
+              (._embedded.records[0].ledger | type == "number") and
+              (._embedded.records[0].ledger > 0)
+            ' >/dev/null <<<"$response"; then
+              echo "::error::Horizon returned an invalid latest-ledger response" >&2
+              return 1
+            fi
+            jq -er '._embedded.records[0].ledger' <<<"$response"
+          }
+
+          printf '::notice::stage=deploy_fresh_constructor_contract\n'
+          DEPLOY_BASELINE="$(latest_ledger)"
+          DEPLOY_STDOUT="$RUNNER_TEMP/niko-sun-deploy.stdout"
+          DEPLOY_STDERR="$RUNNER_TEMP/niko-sun-deploy.stderr"
+          if stellar contract deploy \
+            --wasm "$WASM_PATH" \
+            --source-account "$DEPLOYER_SECRET" \
+            --network testnet \
+            -- \
+            --admin "$DEPLOYER_PUBLIC" \
+            --token "$NATIVE_TOKEN" \
+            >"$DEPLOY_STDOUT" 2>"$DEPLOY_STDERR"; then
+            DEPLOY_STATUS=0
+          else
+            DEPLOY_STATUS=$?
+          fi
+
+          CONTRACT_ID="$(grep -Eo 'C[A-Z2-7]{55}' "$DEPLOY_STDOUT" | tail -n 1 || true)"
+          if [[ ! "$CONTRACT_ID" =~ ^C[A-Z2-7]{55}$ ]]; then
+            echo "::error::Stellar CLI did not return a valid fresh contract ID" >&2
+            exit 1
+          fi
+
+          if ! DEPLOY_JSON="$(node scripts/resolve-stellar-transaction.mjs \
+            --kind deploy \
+            --source-account "$DEPLOYER_PUBLIC" \
+            --baseline-ledger "$DEPLOY_BASELINE" \
+            --contract-id "$CONTRACT_ID" \
+            --timeout-ms 120000)"; then
+            echo "::error::Fresh contract deployment could not be exactly resolved" >&2
+            exit 1
+          fi
+          if ((DEPLOY_STATUS != 0)); then
+            echo "::error::Fresh contract deployment failed; it will not be retried" >&2
+            exit 1
+          fi
+          DEPLOYMENT_TX="$(jq -er '.hash | select(type == "string" and test("^[0-9a-f]{64}$"))' <<<"$DEPLOY_JSON")"
+          DEPLOYMENT_LEDGER="$(jq -er '.ledger | select(type == "number" and . > 0 and floor == .)' <<<"$DEPLOY_JSON")"
+
+          REMOTE_HASH=""
+          for attempt in $(seq 1 45); do
+            if CONTRACT_HASH_OUTPUT="$(stellar contract info hash \
+              --contract-id "$CONTRACT_ID" \
+              --network testnet 2>/dev/null)"; then
+              if [[ "$CONTRACT_HASH_OUTPUT" =~ ([0-9a-fA-F]{64}) ]]; then
+                REMOTE_HASH="${BASH_REMATCH[1],,}"
+              fi
+              if [[ "$REMOTE_HASH" == "$WASM_HASH" ]]; then
+                break
+              fi
+            fi
+            REMOTE_HASH=""
+            sleep 2
+          done
+          if [[ "$REMOTE_HASH" != "$WASM_HASH" ]]; then
+            echo "::error::Deployed contract WASM hash does not match the local optimized WASM" >&2
+            exit 1
+          fi
+
+          if ! stellar contract info interface \
+            --contract-id "$CONTRACT_ID" \
+            --network testnet \
+            >"$RUNNER_TEMP/niko-sun-contract-interface.json" 2>/dev/null; then
+            echo "::error::Unable to read the deployed contract interface" >&2
+            exit 1
+          fi
+          for function_name in __constructor create_project purchase_tokens get_project get_admin get_token; do
+            if ! grep -Fq "$function_name" "$RUNNER_TEMP/niko-sun-contract-interface.json"; then
+              echo "::error::Deployed contract interface is missing a required function" >&2
+              exit 1
+            fi
+          done
+
+          printf '::notice::stage=create_project_1_once\n'
+          CREATE_BASELINE="$(latest_ledger)"
+          if stellar contract invoke \
+            --id "$CONTRACT_ID" \
+            --source-account "$DEPLOYER_SECRET" \
+            --network testnet \
+            --send=yes \
+            -- create_project \
+            --creator "$DEPLOYER_PUBLIC" \
+            --name "Solar Lima Miraflores" \
+            --total_supply 100000 \
+            --price 10000000 \
+            --min_purchase 1 \
+            >"$RUNNER_TEMP/niko-sun-create.stdout" \
+            2>"$RUNNER_TEMP/niko-sun-create.stderr"; then
+            CREATE_STATUS=0
+          else
+            CREATE_STATUS=$?
+          fi
+
+          if ! CREATE_JSON="$(node scripts/resolve-stellar-transaction.mjs \
+            --kind invoke \
+            --source-account "$DEPLOYER_PUBLIC" \
+            --baseline-ledger "$CREATE_BASELINE" \
+            --contract-id "$CONTRACT_ID" \
+            --function create_project \
+            --arg "address:$DEPLOYER_PUBLIC" \
+            --arg "string:Solar Lima Miraflores" \
+            --arg "u128:100000" \
+            --arg "u128:10000000" \
+            --arg "u128:1" \
+            --timeout-ms 120000)"; then
+            echo "::error::Project #1 creation could not be exactly resolved" >&2
+            exit 1
+          fi
+          if ((CREATE_STATUS != 0)); then
+            echo "::error::Project #1 creation failed; it will not be retried" >&2
+            exit 1
+          fi
+          CREATE_PROJECT_TX="$(jq -er '.hash | select(type == "string" and test("^[0-9a-f]{64}$"))' <<<"$CREATE_JSON")"
+          CREATE_PROJECT_LEDGER="$(jq -er '.ledger | select(type == "number" and . > 0 and floor == .)' <<<"$CREATE_JSON")"
+
+          {
+            printf 'contract_id=%s\n' "$CONTRACT_ID"
+            printf 'deployment_tx=%s\n' "$DEPLOYMENT_TX"
+            printf 'deployment_ledger=%s\n' "$DEPLOYMENT_LEDGER"
+            printf 'create_project_tx=%s\n' "$CREATE_PROJECT_TX"
+            printf 'create_project_ledger=%s\n' "$CREATE_PROJECT_LEDGER"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify deployed contract and project state before funding
+        id: state
+        env:
+          CONTRACT_ID: ${{ steps.writes.outputs.contract_id }}
+          DEPLOYER_PUBLIC: ${{ steps.build.outputs.deployer_public }}
+          NATIVE_TOKEN: ${{ steps.build.outputs.native_token }}
+        run: |
+          set -euo pipefail
+          STATE_FILE="$RUNNER_TEMP/testnet-contract-state.json"
+          if ! (
+            cd frontend
+            node --input-type=module >"$STATE_FILE" <<'NODE'
+          import {
+            Account,
+            Contract,
+            TransactionBuilder,
+            nativeToScVal,
+            rpc,
+            scValToNative,
+          } from "@stellar/stellar-sdk";
+
+          const contractId = process.env.CONTRACT_ID;
+          const deployer = process.env.DEPLOYER_PUBLIC;
+          const nativeToken = process.env.NATIVE_TOKEN;
+          const server = new rpc.Server("https://soroban-testnet.stellar.org");
+          const source = new Account(deployer, "0");
+          const contract = new Contract(contractId);
+
+          function withTimeout(promise, milliseconds) {
+            return new Promise((resolveView, rejectView) => {
+              const timer = setTimeout(
+                () => rejectView(new Error("read timeout")),
+                milliseconds
+              );
+              Promise.resolve(promise).then(
+                (value) => {
+                  clearTimeout(timer);
+                  resolveView(value);
+                },
+                (cause) => {
+                  clearTimeout(timer);
+                  rejectView(cause);
+                }
+              );
+            });
+          }
+
+          async function view(name, args = []) {
+            const transaction = new TransactionBuilder(source, {
+              fee: "100",
+              networkPassphrase: "Test SDF Network ; September 2015",
+            })
+              .addOperation(contract.call(name, ...args))
+              .setTimeout(30)
+              .build();
+            const simulation = await withTimeout(
+              server.simulateTransaction(transaction),
+              15_000
+            );
+            if (rpc.Api.isSimulationError(simulation) || !simulation.result?.retval) {
+              throw new Error("view failed");
+            }
+            return scValToNative(simulation.result.retval);
+          }
+
+          function asText(value) {
+            return typeof value === "string" ? value : "";
+          }
+
+          function asBigInt(value) {
+            return typeof value === "bigint" ? value.toString() : "";
+          }
+
+          async function main() {
+            const [admin, token, name, project] = await Promise.all([
+              view("get_admin"),
+              view("get_token"),
+              view("get_project_name", [nativeToScVal(1, { type: "u64" })]),
+              view("get_project", [nativeToScVal(1, { type: "u64" })]),
+            ]);
+            const observed = {
+              admin: asText(admin),
+              token: asText(token),
+              name: asText(name),
+              project: {
+                creator: asText(project?.creator),
+                totalSupply: asBigInt(project?.total_supply),
+                price: asBigInt(project?.price),
+                minPurchase: asBigInt(project?.min_purchase),
+                minted: asBigInt(project?.minted),
+                active: project?.active === true,
+              },
+            };
+            if (
+              observed.admin !== deployer ||
+              observed.token !== nativeToken ||
+              observed.name !== "Solar Lima Miraflores" ||
+              observed.project.creator !== deployer ||
+              observed.project.totalSupply !== "100000" ||
+              observed.project.price !== "10000000" ||
+              observed.project.minPurchase !== "1" ||
+              observed.project.minted !== "0" ||
+              !observed.project.active
+            ) {
+              throw new Error("state mismatch");
+            }
+            process.stdout.write(JSON.stringify(observed));
+          }
+
+          main().catch(() => {
+            process.stderr.write("contract state verification failed\n");
+            process.exitCode = 1;
+          });
+          NODE
+          ); then
+            echo "::error::Deployed contract state verification failed" >&2
+            exit 1
+          fi
+
+          jq -e \
+            --arg deployer "$DEPLOYER_PUBLIC" \
+            --arg token "$NATIVE_TOKEN" '
+            type == "object" and
+            .admin == $deployer and
+            (.admin | type == "string" and test("^G[A-Z2-7]{55}$")) and
+            .token == $token and
+            (.token | type == "string" and test("^C[A-Z2-7]{55}$")) and
+            .name == "Solar Lima Miraflores" and
+            (.project.creator == $deployer) and
+            (.project.creator | type == "string" and test("^G[A-Z2-7]{55}$")) and
+            .project.totalSupply == "100000" and
+            .project.price == "10000000" and
+            .project.minPurchase == "1" and
+            .project.minted == "0" and
+            .project.active == true
+          ' "$STATE_FILE" >/dev/null
+          printf 'state_file=%s\n' "$STATE_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Stage 3 - Generate, mask, and fund two ephemeral buyers
+        run: |
+          set -euo pipefail
+          umask 077
+          KEYPAIR_FILE="$RUNNER_TEMP/niko-sun-e2e-buyers.env"
+          trap 'rm -f "$KEYPAIR_FILE"' EXIT
+
+          (
+            cd frontend
+            node --input-type=module >"$KEYPAIR_FILE" <<'NODE'
+          import { Keypair } from "@stellar/stellar-sdk";
+
+          const buyerA = Keypair.random();
+          const buyerB = Keypair.random();
+          const lines = [
+            `BUYER_A_SECRET=${buyerA.secret()}`,
+            `BUYER_A_PUBLIC=${buyerA.publicKey()}`,
+            `BUYER_B_SECRET=${buyerB.secret()}`,
+            `BUYER_B_PUBLIC=${buyerB.publicKey()}`,
+          ];
+          process.stdout.write(`${lines.join("\n")}\n`);
+          NODE
+          )
+          chmod 600 "$KEYPAIR_FILE"
+
+          set +x
+          source "$KEYPAIR_FILE"
+          set -euo pipefail
+
+          for name in BUYER_A_SECRET BUYER_A_PUBLIC BUYER_B_SECRET BUYER_B_PUBLIC; do
+            value="${!name}"
+            if [[ ! "$value" =~ ^[SG][A-Z2-7]{55}$ ]]; then
+              echo "::error::Generated Stellar keypair is invalid" >&2
+              exit 1
+            fi
+          done
+
+          printf '::add-mask::%s\n' "$BUYER_A_SECRET"
+          printf '::add-mask::%s\n' "$BUYER_B_SECRET"
+          {
+            printf 'BUYER_A_SECRET=%s\n' "$BUYER_A_SECRET"
+            printf 'BUYER_A_PUBLIC=%s\n' "$BUYER_A_PUBLIC"
+            printf 'BUYER_B_SECRET=%s\n' "$BUYER_B_SECRET"
+            printf 'BUYER_B_PUBLIC=%s\n' "$BUYER_B_PUBLIC"
+          } >> "$GITHUB_ENV"
+
+          fund_and_wait() {
+            local public="$1" response
+            if ! curl \
+              --fail \
+              --silent \
+              --show-error \
+              --max-time 30 \
+              --get \
+              --data-urlencode "addr=$public" \
+              "https://friendbot.stellar.org/" >/dev/null 2>&1; then
+              echo "::error::Friendbot funding request failed" >&2
+              return 1
+            fi
+
+            for attempt in $(seq 1 45); do
+              if response="$(curl \
+                --fail \
+                --silent \
+                --show-error \
+                --max-time 15 \
+                "https://horizon-testnet.stellar.org/accounts/$public" 2>/dev/null)" && \
+                jq -e \
+                  --arg public "$public" '
+                  type == "object" and
+                  .account_id == $public and
+                  any(.balances[]?;
+                    .asset_type == "native" and
+                    ((.balance | tonumber) >= 100)
+                  )
+                ' >/dev/null <<<"$response"; then
+                return 0
+              fi
+              sleep 2
+            done
+
+            echo "::error::Ephemeral buyer was not funded with at least 100 XLM" >&2
+            return 1
+          }
+
+          printf '::notice::stage=fund_ephemeral_buyers\n'
+          fund_and_wait "$BUYER_A_PUBLIC"
+          fund_and_wait "$BUYER_B_PUBLIC"
+          unset BUYER_A_SECRET BUYER_B_SECRET
+
+      - name: Stage 4 - Run live milestones and three purchases
+        id: purchases
+        env:
+          CONTRACT_ID: ${{ steps.writes.outputs.contract_id }}
+          DEPLOYMENT_LEDGER: ${{ steps.writes.outputs.deployment_ledger }}
+        run: |
+          set -euo pipefail
+          HORIZON_URL="https://horizon-testnet.stellar.org"
+
+          latest_ledger() {
+            local response
+            response="$(curl \
+              --fail \
+              --silent \
+              --show-error \
+              --max-time 15 \
+              --get \
+              --data-urlencode 'order=desc' \
+              --data-urlencode 'limit=1' \
+              "$HORIZON_URL/ledgers")"
+            jq -er '
+              ._embedded.records[0].ledger
+            ' <<<"$response"
+          }
+
+          purchase_and_resolve() {
+            local label="$1" buyer_public="$2" buyer_secret="$3"
+            local baseline status resolved_json resolved_hash resolved_ledger
+            baseline="$(latest_ledger)"
+            if stellar contract invoke \
+              --id "$CONTRACT_ID" \
+              --source-account "$buyer_secret" \
+              --network testnet \
+              --send=yes \
+              -- purchase_tokens \
+              --buyer "$buyer_public" \
+              --project_id 1 \
+              --amount 1 \
+              >"$RUNNER_TEMP/niko-sun-purchase-$label.stdout" \
+              2>"$RUNNER_TEMP/niko-sun-purchase-$label.stderr"; then
+              status=0
+            else
+              status=$?
+            fi
+
+            if ! resolved_json="$(node scripts/resolve-stellar-transaction.mjs \
+              --kind invoke \
+              --source-account "$buyer_public" \
+              --baseline-ledger "$baseline" \
+              --contract-id "$CONTRACT_ID" \
+              --function purchase_tokens \
+              --arg "address:$buyer_public" \
+              --arg "u64:1" \
+              --arg "u128:1" \
+              --timeout-ms 120000)"; then
+              echo "::error::Purchase $label could not be exactly resolved" >&2
+              return 1
+            fi
+            if ((status != 0)); then
+              echo "::error::Purchase $label failed; it will not be retried" >&2
+              return 1
+            fi
+            resolved_hash="$(jq -er '.hash | select(type == "string" and test("^[0-9a-f]{64}$"))' <<<"$resolved_json")"
+            resolved_ledger="$(jq -er '.ledger | select(type == "number" and . > 0 and floor == .)' <<<"$resolved_json")"
+            printf '%s\t%s\n' "$resolved_hash" "$resolved_ledger"
+          }
+
+          run_harness() {
+            local stage="$1" minted="$2" holders="$3"
+            local metrics_file="$RUNNER_TEMP/testnet-metrics-$stage.json"
+            rm -f "$metrics_file"
+            printf '::notice::stage=%s\n' "$stage"
+            (
+              cd frontend
+              LIVE_HOLDER_TEST=true \
+              LIVE_STAGE="$stage" \
+              EXPECTED_MINTED="$minted" \
+              EXPECTED_HOLDERS="$holders" \
+              EXPECTED_RECONCILED=true \
+              LIVE_METRICS_OUTPUT="$metrics_file" \
+              NEXT_PUBLIC_CONTRACT_ID="$CONTRACT_ID" \
+              NEXT_PUBLIC_CONTRACT_DEPLOYMENT_LEDGER="$DEPLOYMENT_LEDGER" \
+                npm exec -- vitest run __tests__/holder-indexer-live.test.ts
+            )
+            if [[ ! -s "$metrics_file" ]]; then
+              echo "::error::Live harness did not write observed metrics" >&2
+              return 1
+            fi
+            jq -e \
+              --arg stage "$stage" \
+              --arg minted "$minted" \
+              --argjson holders "$holders" '
+                (keys | sort) == ([
+                  "contractMinted",
+                  "expected",
+                  "holderCount",
+                  "reconciled",
+                  "stage",
+                  "status",
+                  "warning"
+                ] | sort) and
+                .stage == $stage and
+                .contractMinted == $minted and
+                .holderCount == $holders and
+                .reconciled == true and
+                .status == "indexed" and
+                .warning == "" and
+                .expected == {
+                  contractMinted: $minted,
+                  holderCount: $holders,
+                  reconciled: true,
+                  status: "indexed",
+                  warning: ""
+                }
+              ' "$metrics_file" >/dev/null
+          }
+
+          run_harness after_project_creation 0 0
+
+          printf '::notice::stage=purchase_a1\n'
+          PURCHASE_A1_RESOLVED="$(purchase_and_resolve a1 "$BUYER_A_PUBLIC" "$BUYER_A_SECRET")"
+          IFS=$'\t' read -r PURCHASE_A1_TX PURCHASE_A1_LEDGER <<<"$PURCHASE_A1_RESOLVED"
+          run_harness after_purchase_a1 1 1
+
+          printf '::notice::stage=purchase_a2\n'
+          PURCHASE_A2_RESOLVED="$(purchase_and_resolve a2 "$BUYER_A_PUBLIC" "$BUYER_A_SECRET")"
+          IFS=$'\t' read -r PURCHASE_A2_TX PURCHASE_A2_LEDGER <<<"$PURCHASE_A2_RESOLVED"
+          run_harness after_purchase_a2 2 1
+
+          printf '::notice::stage=purchase_b\n'
+          PURCHASE_B_RESOLVED="$(purchase_and_resolve b "$BUYER_B_PUBLIC" "$BUYER_B_SECRET")"
+          IFS=$'\t' read -r PURCHASE_B_TX PURCHASE_B_LEDGER <<<"$PURCHASE_B_RESOLVED"
+          run_harness after_purchase_b 3 2
+
+          {
+            printf 'purchase_a1_tx=%s\n' "$PURCHASE_A1_TX"
+            printf 'purchase_a1_ledger=%s\n' "$PURCHASE_A1_LEDGER"
+            printf 'purchase_a2_tx=%s\n' "$PURCHASE_A2_TX"
+            printf 'purchase_a2_ledger=%s\n' "$PURCHASE_A2_LEDGER"
+            printf 'purchase_b_tx=%s\n' "$PURCHASE_B_TX"
+            printf 'purchase_b_ledger=%s\n' "$PURCHASE_B_LEDGER"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stage 5 - Build strict testnet E2E evidence
+        env:
+          DEPLOYER_SECRET: ${{ secrets.DEPLOYER_SECRET }}
+          CONTRACT_ID: ${{ steps.writes.outputs.contract_id }}
+          WASM_HASH: ${{ steps.build.outputs.wasm_hash }}
+          DEPLOYMENT_TX: ${{ steps.writes.outputs.deployment_tx }}
+          DEPLOYMENT_LEDGER: ${{ steps.writes.outputs.deployment_ledger }}
+          CREATE_PROJECT_TX: ${{ steps.writes.outputs.create_project_tx }}
+          CREATE_PROJECT_LEDGER: ${{ steps.writes.outputs.create_project_ledger }}
+          PURCHASE_A1_TX: ${{ steps.purchases.outputs.purchase_a1_tx }}
+          PURCHASE_A1_LEDGER: ${{ steps.purchases.outputs.purchase_a1_ledger }}
+          PURCHASE_A2_TX: ${{ steps.purchases.outputs.purchase_a2_tx }}
+          PURCHASE_A2_LEDGER: ${{ steps.purchases.outputs.purchase_a2_ledger }}
+          PURCHASE_B_TX: ${{ steps.purchases.outputs.purchase_b_tx }}
+          PURCHASE_B_LEDGER: ${{ steps.purchases.outputs.purchase_b_ledger }}
+          STATE_FILE: ${{ steps.state.outputs.state_file }}
+        run: |
+          set -euo pipefail
+          EXPLORER_BASE="https://stellar.expert/explorer/testnet"
+          CONTRACT_URL="$EXPLORER_BASE/contract/$CONTRACT_ID"
+          DEPLOYMENT_URL="$EXPLORER_BASE/tx/$DEPLOYMENT_TX"
+          DEPLOYMENT_LEDGER_URL="$EXPLORER_BASE/ledger/$DEPLOYMENT_LEDGER"
+          CREATE_PROJECT_URL="$EXPLORER_BASE/tx/$CREATE_PROJECT_TX"
+          PURCHASE_A1_URL="$EXPLORER_BASE/tx/$PURCHASE_A1_TX"
+          PURCHASE_A2_URL="$EXPLORER_BASE/tx/$PURCHASE_A2_TX"
+          PURCHASE_B_URL="$EXPLORER_BASE/tx/$PURCHASE_B_TX"
+          BUYER_A_URL="$EXPLORER_BASE/account/$BUYER_A_PUBLIC"
+          BUYER_B_URL="$EXPLORER_BASE/account/$BUYER_B_PUBLIC"
+
+          validate_metrics() {
+            local file="$1" stage="$2" minted="$3" holders="$4"
+            jq -e \
+              --arg stage "$stage" \
+              --arg minted "$minted" \
+              --argjson holders "$holders" '
+                (keys | sort) == ([
+                  "contractMinted",
+                  "expected",
+                  "holderCount",
+                  "reconciled",
+                  "stage",
+                  "status",
+                  "warning"
+                ] | sort) and
+                .stage == $stage and
+                .contractMinted == $minted and
+                .holderCount == $holders and
+                .reconciled == true and
+                .status == "indexed" and
+                .warning == "" and
+                .expected == {
+                  contractMinted: $minted,
+                  holderCount: $holders,
+                  reconciled: true,
+                  status: "indexed",
+                  warning: ""
+                }
+              ' "$file" >/dev/null
+          }
+
+          PROJECT_METRICS="$RUNNER_TEMP/testnet-metrics-after_project_creation.json"
+          A1_METRICS="$RUNNER_TEMP/testnet-metrics-after_purchase_a1.json"
+          A2_METRICS="$RUNNER_TEMP/testnet-metrics-after_purchase_a2.json"
+          B_METRICS="$RUNNER_TEMP/testnet-metrics-after_purchase_b.json"
+          validate_metrics "$PROJECT_METRICS" after_project_creation 0 0
+          validate_metrics "$A1_METRICS" after_purchase_a1 1 1
+          validate_metrics "$A2_METRICS" after_purchase_a2 2 1
+          validate_metrics "$B_METRICS" after_purchase_b 3 2
+
+          jq -n \
+            --arg network testnet \
+            --arg contract_id "$CONTRACT_ID" \
+            --arg wasm_hash "$WASM_HASH" \
+            --arg deployment_tx "$DEPLOYMENT_TX" \
+            --argjson deployment_ledger "$DEPLOYMENT_LEDGER" \
+            --arg create_project_tx "$CREATE_PROJECT_TX" \
+            --argjson create_project_ledger "$CREATE_PROJECT_LEDGER" \
+            --arg purchase_a1_tx "$PURCHASE_A1_TX" \
+            --argjson purchase_a1_ledger "$PURCHASE_A1_LEDGER" \
+            --arg purchase_a2_tx "$PURCHASE_A2_TX" \
+            --argjson purchase_a2_ledger "$PURCHASE_A2_LEDGER" \
+            --arg purchase_b_tx "$PURCHASE_B_TX" \
+            --argjson purchase_b_ledger "$PURCHASE_B_LEDGER" \
+            --arg buyer_a_public "$BUYER_A_PUBLIC" \
+            --arg buyer_b_public "$BUYER_B_PUBLIC" \
+            --slurpfile project "$PROJECT_METRICS" \
+            --slurpfile a1 "$A1_METRICS" \
+            --slurpfile a2 "$A2_METRICS" \
+            --slurpfile b "$B_METRICS" \
+            --slurpfile state "$STATE_FILE" \
+            --arg contract_url "$CONTRACT_URL" \
+            --arg deployment_url "$DEPLOYMENT_URL" \
+            --arg deployment_ledger_url "$DEPLOYMENT_LEDGER_URL" \
+            --arg create_project_url "$CREATE_PROJECT_URL" \
+            --arg a1_url "$PURCHASE_A1_URL" \
+            --arg a2_url "$PURCHASE_A2_URL" \
+            --arg b_url "$PURCHASE_B_URL" \
+            --arg buyer_a_url "$BUYER_A_URL" \
+            --arg buyer_b_url "$BUYER_B_URL" '
+            {
+              network: $network,
+              contract_id: $contract_id,
+              wasm_hash: $wasm_hash,
+              deployment_tx: $deployment_tx,
+              deployment_ledger: $deployment_ledger,
+              create_project_tx: $create_project_tx,
+              create_project_ledger: $create_project_ledger,
+              purchase_a1_tx: $purchase_a1_tx,
+              purchase_a1_ledger: $purchase_a1_ledger,
+              purchase_a2_tx: $purchase_a2_tx,
+              purchase_a2_ledger: $purchase_a2_ledger,
+              purchase_b_tx: $purchase_b_tx,
+              purchase_b_ledger: $purchase_b_ledger,
+              buyer_a_public: $buyer_a_public,
+              buyer_b_public: $buyer_b_public,
+              contract_state: $state[0],
+              milestones: [
+                {
+                  stage: $project[0].stage,
+                  expected: $project[0].expected,
+                  observed: ($project[0] | {
+                    contractMinted,
+                    holderCount,
+                    reconciled,
+                    status,
+                    warning,
+                    stage
+                  }),
+                  status: "passed"
+                },
+                {
+                  stage: $a1[0].stage,
+                  expected: $a1[0].expected,
+                  observed: ($a1[0] | {
+                    contractMinted,
+                    holderCount,
+                    reconciled,
+                    status,
+                    warning,
+                    stage
+                  }),
+                  status: "passed"
+                },
+                {
+                  stage: $a2[0].stage,
+                  expected: $a2[0].expected,
+                  observed: ($a2[0] | {
+                    contractMinted,
+                    holderCount,
+                    reconciled,
+                    status,
+                    warning,
+                    stage
+                  }),
+                  status: "passed"
+                },
+                {
+                  stage: $b[0].stage,
+                  expected: $b[0].expected,
+                  observed: ($b[0] | {
+                    contractMinted,
+                    holderCount,
+                    reconciled,
+                    status,
+                    warning,
+                    stage
+                  }),
+                  status: "passed"
+                }
+              ],
+              explorer_urls: {
+                contract: $contract_url,
+                deployment_transaction: $deployment_url,
+                deployment_ledger: $deployment_ledger_url,
+                create_project_transaction: $create_project_url,
+                purchase_a1_transaction: $a1_url,
+                purchase_a2_transaction: $a2_url,
+                purchase_b_transaction: $b_url,
+                buyer_a_account: $buyer_a_url,
+                buyer_b_account: $buyer_b_url
+              }
+            }
+          ' > testnet-e2e-evidence.json
+
+          jq -e '
+            def hash:
+              type == "string" and test("^[0-9a-f]{64}$");
+            def ledger:
+              type == "number" and . > 0 and floor == .;
+            def public_key:
+              type == "string" and test("^G[A-Z2-7]{55}$");
+            def contract_id:
+              type == "string" and test("^C[A-Z2-7]{55}$");
+            def expected_tuple($minted; $holders):
+              . == {
+                contractMinted: $minted,
+                holderCount: $holders,
+                reconciled: true,
+                status: "indexed",
+                warning: ""
+              };
+            type == "object" and
+            .network == "testnet" and
+            (.contract_id | contract_id) and
+            (.wasm_hash | hash) and
+            (.deployment_tx | hash) and
+            (.deployment_ledger | ledger) and
+            (.create_project_tx | hash) and
+            (.create_project_ledger | ledger) and
+            (.purchase_a1_tx | hash) and
+            (.purchase_a1_ledger | ledger) and
+            (.purchase_a2_tx | hash) and
+            (.purchase_a2_ledger | ledger) and
+            (.purchase_b_tx | hash) and
+            (.purchase_b_ledger | ledger) and
+            (.buyer_a_public | public_key) and
+            (.buyer_b_public | public_key) and
+            (.contract_state.name == "Solar Lima Miraflores") and
+            (.contract_state.project.totalSupply == "100000") and
+            (.contract_state.project.price == "10000000") and
+            (.contract_state.project.minPurchase == "1") and
+            (.contract_state.project.minted == "0") and
+            (.milestones | type == "array" and length == 4) and
+            (.milestones[0] |
+              .stage == "after_project_creation" and
+              (.expected | expected_tuple("0"; 0)) and
+              (.observed == (.expected + {stage: "after_project_creation"})) and
+              .status == "passed"
+            ) and
+            (.milestones[1] |
+              .stage == "after_purchase_a1" and
+              (.expected | expected_tuple("1"; 1)) and
+              (.observed == (.expected + {stage: "after_purchase_a1"})) and
+              .status == "passed"
+            ) and
+            (.milestones[2] |
+              .stage == "after_purchase_a2" and
+              (.expected | expected_tuple("2"; 1)) and
+              (.observed == (.expected + {stage: "after_purchase_a2"})) and
+              .status == "passed"
+            ) and
+            (.milestones[3] |
+              .stage == "after_purchase_b" and
+              (.expected | expected_tuple("3"; 2)) and
+              (.observed == (.expected + {stage: "after_purchase_b"})) and
+              .status == "passed"
+            ) and
+            (.explorer_urls | type == "object")
+          ' testnet-e2e-evidence.json >/dev/null
+
+          for secret in "${DEPLOYER_SECRET:-}" "${BUYER_A_SECRET:-}" "${BUYER_B_SECRET:-}"; do
+            if [[ -z "$secret" ]]; then
+              echo "::error::A secret required for evidence exclusion checks is missing" >&2
+              exit 1
+            fi
+            if jq -e --arg secret "$secret" '
+              any(.. | strings; . == $secret or contains($secret))
+            ' testnet-e2e-evidence.json >/dev/null; then
+              echo "::error::Evidence contains a secret value" >&2
+              exit 1
+            fi
+          done
+
+          printf '::notice::stage=strict_evidence_ready\n'
+
+      - name: Upload testnet E2E evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: testnet-e2e-evidence
+          path: testnet-e2e-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish safe job outputs
+        id: result
+        env:
+          EVIDENCE_FILE: testnet-e2e-evidence.json
+        run: |
+          set -euo pipefail
+          for key in \
+            network \
+            contract_id \
+            wasm_hash \
+            deployment_tx \
+            deployment_ledger \
+            create_project_tx \
+            create_project_ledger \
+            purchase_a1_tx \
+            purchase_a1_ledger \
+            purchase_a2_tx \
+            purchase_a2_ledger \
+            purchase_b_tx \
+            purchase_b_ledger \
+            buyer_a_public \
+            buyer_b_public; do
+            value="$(jq -er --arg key "$key" '.[$key]' "$EVIDENCE_FILE")"
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+            printf '::notice::%s=%s\n' "$key" "$value"
+          done
