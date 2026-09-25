@@ -2,6 +2,7 @@ import ProjectDetailClient from "./client";
 
 export const dynamicParams = false;
 
+// Static export cannot discover chain state at build time; keep these IDs aligned with deployed projects.
 const STATIC_PROJECT_IDS = ["1", "2", "3", "4"] as const;
 
 export function generateStaticParams() {
