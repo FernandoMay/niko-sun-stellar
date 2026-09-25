@@ -128,6 +128,82 @@ describe("on-chain project and claim selection", () => {
     expect(deriveProjectIds(5n)).toEqual([1, 2, 3, 4]);
   });
 
+  it("keeps live project state and referential values isolated by project ID", async () => {
+    const creator =
+      "GASERVWNLHAWMG6V5NBL5EGYFKOOZDQYSUUW7REMJRET5JNZWWQLQB4G";
+    const names = new Map([
+      [1, "Solar Lima Miraflores"],
+      [2, "Solar Lima Norte"],
+      [3, "Solar Arequipa"],
+      [4, "Solar San Martín"],
+    ]);
+    const prices = new Map([
+      [1, 10_000_000n],
+      [2, 20_000_000n],
+      [3, 30_000_000n],
+      [4, 40_000_000n],
+    ]);
+    const read = vi.fn(
+      async (_contractId: string, method: string, args: unknown[] = []) => {
+        if (method === "next_project_id") return 5n;
+        const projectId = Number(args[0]);
+        const name = names.get(projectId);
+        if (name === undefined) throw new Error("unknown project");
+        if (method === "get_project") {
+          return {
+            creator,
+            total_supply: 100n,
+            minted: projectId === 1 ? 4n : 0n,
+            min_purchase: 1n,
+            price: prices.get(projectId),
+            created_at: BigInt(projectId),
+            active: true,
+            total_energy_kwh: BigInt(projectId * 10),
+            total_revenue: projectId === 1 ? 41_000_000n : 0n,
+            reward_per_token_stored: 0n,
+          };
+        }
+        if (method === "get_project_name") return name;
+        if (method === "get_sales_balance") {
+          return projectId === 1 ? 40_000_000n : 0n;
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }
+    );
+
+    const catalog = await readProjectCatalog(read, "contract");
+
+    expect(catalog.status).toBe("ready");
+    expect(catalog.projectIds).toEqual([1, 2, 3, 4]);
+    expect(deriveTotalMinted(catalog)).toBe(4n);
+    expect(catalog.projects.map((project) => project.price)).toEqual([
+      10_000_000n,
+      20_000_000n,
+      30_000_000n,
+      40_000_000n,
+    ]);
+    expect(catalog.projects.map((project) => project.salesBalance)).toEqual([
+      40_000_000n,
+      0n,
+      0n,
+      0n,
+    ]);
+
+    const projectTwoValue = sumReferentialValueStroops(
+      [{ projectId: 2, tokenBalance: 1n, contractClaimable: 0n, totalClaimed: 0n }],
+      catalog.projects,
+      { catalogStatus: catalog.status, portfolioStatus: "ready" }
+    );
+    expect(projectTwoValue).toBe(20_000_000n);
+    expect(
+      sumReferentialValueStroops(
+        [{ projectId: 999, tokenBalance: 1n, contractClaimable: 0n, totalClaimed: 0n }],
+        catalog.projects,
+        { catalogStatus: catalog.status, portfolioStatus: "ready" }
+      )
+    ).toBeNull();
+  });
+
   it("fails closed for invalid or unbounded project counts", () => {
     expect(deriveProjectIds(null)).toEqual([]);
     expect(deriveProjectIds("not-a-number")).toEqual([]);
@@ -361,6 +437,17 @@ describe("user-facing truthfulness guardrails", () => {
     expect(frontendSource).not.toContain("fallbackProjects");
   });
 
+  it("documents live mutations, snapshot boundaries, and project isolation", () => {
+    const readme = readRepoFile("README.md");
+    expect(readme).toContain("## Live state semantics");
+    expect(readme).toContain("Successful `purchase_tokens`");
+    expect(readme).toContain("Successful `deposit_revenue`");
+    expect(readme).toContain("## Project isolation and route matrix");
+    expect(readme).toContain("/project/999");
+    expect(readme).toContain("## Snapshot versus live state");
+    expect(readme).toContain("evidence/transactions.md");
+  });
+
   it("removes legacy metrics, fake activity payments, and unsupported certificate claims", () => {
     const forbidden = [
       /\b847\b/,
@@ -410,6 +497,12 @@ describe("user-facing truthfulness guardrails", () => {
     expect(netlify).toContain('to = "/404.html"');
     expect(netlify).toContain("status = 404");
     expect(netlify).not.toContain('to = "/index.html"');
+  });
+
+  it("generates the deployed project routes without opening unknown IDs", () => {
+    const projectPage = readRepoFile("frontend/app/project/[id]/page.tsx");
+    expect(projectPage).toContain("export const dynamicParams = false");
+    expect(projectPage).toContain('const STATIC_PROJECT_IDS = ["1", "2", "3", "4"]');
   });
 
   it("wires proof navigation and contains no placeholder hash links", () => {

@@ -51,3 +51,5 @@ The following projects were created successfully **after** the immutable snapsho
 | `4` | Solar San Martín | `10` | `1.0000000 XLM` | `1` | [`c73708cb…c6d`](https://stellar.expert/explorer/testnet/tx/c73708cbd73fbd6c80f3408a5e7bdb0a53d2d6b8e062022a58380d779a643c6d) | `4859198` |
 
 At registration, all three had `minted = 0`, `sales balance = 0`, `total revenue = 0`, and `energy = 0`. No physical-generation, capacity, APY, dividend, or progress values were invented.
+
+This post-snapshot section records project registrations, not a complete live transaction history. Later successful purchases, deposits, claims, or energy updates belong to the live dashboard and must not be retroactively merged into the immutable `/proof` totals.

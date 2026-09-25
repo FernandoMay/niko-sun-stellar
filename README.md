@@ -125,6 +125,66 @@ Open [http://localhost:3000](http://localhost:3000)
 | `get_claimable()` | Check claimable revenue |
 | `get_portfolio()` | Get investor portfolio |
 
+## Live state semantics
+
+The values shown by the dashboard are protocol state, not seeded UI data. A failed or incomplete transaction does not partially mutate the contract.
+
+| Operation | State that changes | State that does not change |
+|---|---|---|
+| `create_project` | Stores the name, supply, price, minimum purchase, active flag, creator, and zeroed financial/energy fields | No tokens are minted and no XLM moves |
+| Successful `purchase_tokens` | Increments `minted`, project `total_revenue`, `sales_balance`, the buyer's project balance, and emits a `purchase` event | Does not create a claim or change energy |
+| Successful `deposit_revenue` | Transfers creator XLM, increments `total_revenue`, updates the reward-per-token index, and optionally adds the supplied energy delta | Does not increase `minted` or `sales_balance` |
+| `update_energy` | Adds the creator-authorized energy delta | Does not move XLM or create revenue |
+| Successful `claim_revenue` | Reduces the holder's pending claim and records the amount claimed | Does not change project supply, sales, revenue, or energy |
+| `withdraw_sales` | Reduces the creator's `sales_balance` and the global sales total | Does not change `minted`, `total_revenue`, or energy |
+
+For native XLM, `10000000` stroops equals `1.0000000 XLM`. The dashboard uses bigint-safe values and shows `Unavailable` or an incomplete state when a required RPC read fails; it never substitutes zero for an unknown read.
+
+## Project isolation and route matrix
+
+Project discovery is driven by `next_project_id - 1`. Every project read and holder claim is keyed by its `project_id`; state from one project is never reused as a fallback for another.
+
+| Route | Contract behavior | UI boundary |
+|---|---|---|
+| `/project/1` | Reads project `1` and its live views | Active demo project with historical proof |
+| `/project/2` | Reads project `2` | Live project; starts with real zero activity until a transaction occurs |
+| `/project/3` | Reads project `3` | Live project; starts with real zero activity until a transaction occurs |
+| `/project/4` | Reads project `4` | Live project; starts with real zero activity until a transaction occurs |
+| `/project/999` | No project record | Static export returns a real `404` |
+
+The current registered projects are:
+
+| ID | Name | Supply | Price | Minimum |
+|---:|---|---:|---:|---:|
+| `1` | Solar Lima Miraflores | `100000` | `1.0000000 XLM` | `1` |
+| `2` | Solar Lima Norte | `15` | `1.0000000 XLM` | `1` |
+| `3` | Solar Arequipa | `20` | `1.0000000 XLM` | `1` |
+| `4` | Solar San Martín | `10` | `1.0000000 XLM` | `1` |
+
+Projects `2`-`4` were created after the immutable `/proof` snapshot. Their registration transactions and initial zero state are recorded in [`evidence/transactions.md`](evidence/transactions.md); they are intentionally not retroactively included in the historical proof totals.
+
+## Snapshot versus live state
+
+- `/dashboard`, project pages, and the landing verification read the chain at runtime.
+- `/proof` is an immutable historical snapshot at ledger `4856253`, observed on `2026-09-24`.
+- The proof page may differ from the dashboard after later successful transactions; that difference is expected and must not be hidden.
+- See [`evidence/README.md`](evidence/README.md) for the evidence boundary and [`evidence/transactions.md`](evidence/transactions.md) for post-snapshot registrations.
+
+### Live read verification
+
+With the Stellar CLI configured for Testnet, verify any project directly without trusting the UI:
+
+```bash
+stellar contract invoke \
+  --id CAW37S6RDQCRCHUBMFG4KMMZHSNI6AD5AR5MG5OQS76J7FU7JUDR3UAK \
+  --source-account niko_deployer \
+  --network testnet \
+  --send=no \
+  -- get_project --project_id 2
+```
+
+Repeat with `--project_id 3` and `--project_id 4`. The returned `minted`, `total_revenue`, `total_energy_kwh`, and `sales_balance` are the current protocol values; a successful transaction is the only thing that changes them.
+
 ## 🎨 Design System
 
 - **Primary**: Emerald (#059669)
