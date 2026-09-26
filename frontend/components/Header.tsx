@@ -23,16 +23,30 @@ export default function Header() {
     <>
       <header className="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-xl border-b border-slate-200/80 shadow-sm">
         <div className="h-16 max-w-7xl mx-auto px-5 lg:px-10 flex items-center justify-between gap-6">
-          {/* Official NIKO SUN logo, cropped from the clean brand asset. */}
-          <a href="/" className="flex items-center group" aria-label="NIKO SUN, volver al inicio">
+          {/* Official NIKO SUN logo asset. */}
+          <a href="/" className="flex items-center gap-3 group" aria-label="NIKO SUN, volver al inicio">
             <img
-              src="/niko-sun-logo.png"
-              alt="NIKO SUN — Solar power and RWA tokens"
-              width={930}
-              height={428}
-              className="h-14 w-auto max-w-[220px] object-contain transition-transform group-hover:scale-[1.02]"
+              src="/niko-sun-logo-original.png"
+              alt="NIKO SUN official logo"
+              width={274}
+              height={340}
+              className="h-14 w-auto object-contain transition-transform group-hover:scale-[1.02]"
               decoding="async"
             />
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xl tracking-tight font-extrabold text-slate-900 font-display">
+                  NIKO
+                  <span className="text-amber-600">SUN</span>
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-100 text-emerald-800 font-bold border border-emerald-300">
+                  RWA SOLAR
+                </span>
+              </div>
+              <span className="font-mono text-[11px] text-emerald-700 font-semibold tracking-wide">
+                Powered by Stellar Soroban
+              </span>
+            </div>
           </a>
 
           {/* Nav */}
