@@ -271,6 +271,13 @@ describe("per-page metadata", () => {
     expect(dashboard).toContain('absoluteUrl("/dashboard/")');
     expect(dashboard).toContain("Freighter");
   });
+
+  it("keeps the 404 page noindex and without a canonical URL", () => {
+    const notFound = readFrontendFile("app/not-found.tsx");
+    expect(notFound).toContain("robots: { index: false, follow: false }");
+    expect(notFound).toContain("alternates: { canonical: null }");
+    expect(notFound).toContain("Página no encontrada");
+  });
 });
 
 describe("home hero copy", () => {
