@@ -502,7 +502,13 @@ describe("user-facing truthfulness guardrails", () => {
   it("generates the deployed project routes without opening unknown IDs", () => {
     const projectPage = readRepoFile("frontend/app/project/[id]/page.tsx");
     expect(projectPage).toContain("export const dynamicParams = false");
-    expect(projectPage).toContain('const STATIC_PROJECT_IDS = ["1", "2", "3", "4"]');
+    // The deployed ID list lives in lib/site.ts so the sitemap, the static export
+    // and the SEO copy cannot drift apart.
+    expect(projectPage).toContain("STATIC_PROJECT_IDS");
+    expect(projectPage).toMatch(/from "@\/lib\/site"/);
+    expect(readRepoFile("frontend/lib/site.ts")).toContain(
+      'export const STATIC_PROJECT_IDS = ["1", "2", "3", "4"] as const'
+    );
   });
 
   it("wires proof navigation and contains no placeholder hash links", () => {

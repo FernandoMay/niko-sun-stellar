@@ -28,15 +28,15 @@ export default function Hero() {
             </div>
 
             <h1 className="font-display text-[28px] leading-[36px] lg:text-[56px] lg:leading-[64px] text-slate-900 tracking-tight font-bold max-w-2xl">
-              Invierte en{" "}
+              Compra tokens de{" "}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600">
-                Energía Solar
-              </span>
-              . Reclama{" "}
+                Proyectos Solares
+              </span>{" "}
+              con XLM. Reclama{" "}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700">
                 Ingresos Depositados
-              </span>
-              .
+              </span>{" "}
+              on-chain.
             </h1>
 
             <div className="flex items-center gap-2 text-slate-500 font-mono text-[11px]">

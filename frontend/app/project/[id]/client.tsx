@@ -50,7 +50,14 @@ function shortAddress(value: string | null | undefined) {
   return value ? `${value.slice(0, 6)}...${value.slice(-4)}` : "—";
 }
 
-export default function ProjectDetailClient({ id }: { id?: string }) {
+export default function ProjectDetailClient({
+  id,
+  staticName,
+}: {
+  id?: string;
+  /** Static project name from `PROJECT_SEO`; renders the H1 before any RPC read. */
+  staticName?: string | null;
+}) {
   const {
     connected,
     address,
@@ -232,7 +239,10 @@ export default function ProjectDetailClient({ id }: { id?: string }) {
     tokenAmount,
   ]);
 
-  const projectName = project?.name ?? (projectKnown ? `Project #${projectId}` : "Unavailable project");
+  // The static name keeps the exported HTML (and the H1) stable without a network
+  // read; the on-chain name replaces it once the catalog resolves.
+  const staticProjectName = staticName ?? (projectId !== null ? `Project #${projectId}` : "Proyecto solar");
+  const projectName = project?.name ?? staticProjectName;
   const unavailable = !loading && !projectKnown;
 
   return (
@@ -271,8 +281,10 @@ export default function ProjectDetailClient({ id }: { id?: string }) {
         </nav>
 
         {unavailable ? (
-          <div className="mb-8 rounded-2xl border border-amber-200 bg-amber-50 p-6">
-            <h1 className="font-display text-[24px] font-bold text-amber-900">Project #{id ?? "—"} is unavailable</h1>
+          <div className="mb-8 rounded-2xl border border-amber-200 bg-amber-50 p-6" role="status">
+            <h2 className="font-display text-[20px] font-bold text-amber-900">
+              Project #{id ?? "—"} is unavailable
+            </h2>
             <p className="mt-2 text-[13px] text-amber-800">
               The requested ID is not present in the contract-derived project range. Purchase actions are disabled; project 1 is never used as a fallback.
             </p>
@@ -302,8 +314,13 @@ export default function ProjectDetailClient({ id }: { id?: string }) {
           </div>
 
           <h1 className="font-display text-[32px] font-bold leading-tight text-slate-900 lg:text-[42px]">
-            {loading ? "Loading project…" : projectName}
+            {projectName}
           </h1>
+          {loading ? (
+            <p className="mt-1 font-mono text-[11px] text-slate-500" role="status">
+              Cargando estado on-chain del contrato…
+            </p>
+          ) : null}
           <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-slate-600">
             Financial and token values on this page come directly from the contract. Physical location, capacity, legal title, APY, CO₂, audit status, and IoT telemetry are not inferred when evidence is unavailable.
           </p>

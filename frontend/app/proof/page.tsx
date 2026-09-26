@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import {
@@ -5,6 +6,41 @@ import {
   formatStroopsAsXlm,
 } from "@/lib/amounts";
 import { PUBLIC_EVIDENCE } from "@/lib/publicEvidence";
+import {
+  OG_IMAGE,
+  SITE_LOCALE,
+  SITE_NAME,
+  absoluteUrl,
+} from "@/lib/site";
+
+/**
+ * This page renders a frozen, historical snapshot recorded at
+ * `PUBLIC_EVIDENCE.snapshotLedger`. The copy states that explicitly instead of
+ * presenting the numbers as current live state.
+ */
+export const metadata: Metadata = {
+  title: {
+    absolute: `Evidencia pública on-chain · ${SITE_NAME} Stellar Testnet`,
+  },
+  description: `Evidencia pública del prototipo Soroban en Stellar Testnet: contrato desplegado, estado del proyecto, compras, depósitos y reclamos observados en el ledger ${PUBLIC_EVIDENCE.snapshotLedger}, con enlaces al explorador. Snapshot histórico, no estado en vivo.`,
+  alternates: { canonical: "/proof/" },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    locale: SITE_LOCALE,
+    siteName: SITE_NAME,
+    url: absoluteUrl("/proof/"),
+    title: `Evidencia pública on-chain · ${SITE_NAME} Stellar Testnet`,
+    description: `Evidencia pública del prototipo Soroban en Stellar Testnet: contrato desplegado, estado del proyecto, compras, depósitos y reclamos observados en el ledger ${PUBLIC_EVIDENCE.snapshotLedger}, con enlaces al explorador. Snapshot histórico, no estado en vivo.`,
+    images: [OG_IMAGE],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `Evidencia pública on-chain · ${SITE_NAME} Stellar Testnet`,
+    description: `Evidencia pública del prototipo Soroban en Stellar Testnet: contrato desplegado, estado del proyecto, compras, depósitos y reclamos observados en el ledger ${PUBLIC_EVIDENCE.snapshotLedger}, con enlaces al explorador. Snapshot histórico, no estado en vivo.`,
+    images: [OG_IMAGE.url],
+  },
+};
 
 function ExplorerLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
@@ -84,10 +120,10 @@ export default function ProofPage() {
                 </span>
               </div>
               <h1 className="font-display text-[32px] font-bold tracking-tight text-slate-900 lg:text-[42px]">
-                Public protocol evidence
+                NIKO SUN — Evidencia pública del protocolo
               </h1>
               <p className="mt-3 max-w-3xl text-[14px] leading-relaxed text-slate-600">
-                Values below are observed on-chain Testnet state or direct transaction evidence. Demo telemetry, estimated physical-asset metadata, legal claims, and fiat valuation are excluded.
+                Los valores siguientes son estado on-chain observado en Stellar Testnet o evidencia directa de transacciones. Se excluyen telemetría demo, metadatos físicos estimados, afirmaciones legales y valoración fiat.
               </p>
             </div>
             <div className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-[11px] text-slate-600">
