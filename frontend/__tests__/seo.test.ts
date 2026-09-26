@@ -300,6 +300,17 @@ describe("home hero copy", () => {
   });
 });
 
+describe("brand logo", () => {
+  it("uses the official cropped logo in the navbar", () => {
+    const header = readFrontendFile("components/Header.tsx");
+    expect(header).toContain('src="/niko-sun-logo.png"');
+    expect(header).toContain('alt="NIKO SUN — Solar power and RWA tokens"');
+    expect(header).toContain('aria-label="NIKO SUN, volver al inicio"');
+    expect(header).not.toContain("solar_power");
+    expect(existsSync(path.join(frontendRoot, "public", "niko-sun-logo.png"))).toBe(true);
+  });
+});
+
 describe("open graph image", () => {
   it("ships /public/og.jpg at exactly 1200x630", () => {
     const buffer = readFileSync(path.join(frontendRoot, "public", "og.jpg"));
