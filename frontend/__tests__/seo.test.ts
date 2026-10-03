@@ -285,7 +285,8 @@ describe("home hero copy", () => {
     const hero = readFrontendFile("components/Hero.tsx");
     expect(hero).not.toContain("Invierte en");
     expect(hero).toContain("Compra tokens de");
-    expect(hero).toContain("Proyectos Solares");
+    expect(hero).toContain("Energía Solar");
+    expect(hero).not.toContain("Proyectos Solares");
     expect(hero).toContain("con XLM. Reclama");
     expect(hero).toContain("Ingresos Depositados");
     expect(hero).toContain("on-chain.");
